@@ -1,0 +1,18 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_installchangelogs:
+	dh_installchangelogs Changes.xbs
+
+override_dh_installexamples:
+	dh_installexamples
+	chmod +x debian/xbs/usr/share/doc/xbs/examples/runex
+
+override_dh_compress:
+	# Leave these uncompressed so that runex works.
+	dh_compress -X.bs -X.mv
+
+override_dh_fixperms:
+	dh_fixperms -Xrunex

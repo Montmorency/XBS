@@ -1,0 +1,12 @@
+#!/usr/bin/perl
+ 
+@exs = qw( in alfa bi2201 c60 gray ]
+           grpht hIII pd8_10 ring
+           serp  stb  tic
+        );
+
+foreach (@exs)  {
+
+  system "xbs $_";
+
+}

@@ -1,0 +1,17 @@
+Source: xbs
+Section: science
+Priority: optional
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+XSBC-Original-Maintainer: Matthew Vernon <matthew@debian.org>
+Build-Depends: debhelper (>= 9~), libx11-dev, x11proto-core-dev
+Standards-Version: 3.8.4
+
+Package: xbs
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: 3-d models and movies of molecules
+ xbs ball-and-sticks plotting program can create still
+ and moving three dimensional models of molecules. X11 and
+ PostScript output are available.  Models can be rotated,
+ scaled, etc.  Various labeling, shading, lighting, 
+ coloring options are available.

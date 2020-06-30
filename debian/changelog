@@ -1,0 +1,101 @@
+xbs (0-10build1) bionic; urgency=high
+
+  * No change rebuild to pick up -fPIE compiler default
+
+ -- Balint Reczey <rbalint@ubuntu.com>  Tue, 03 Apr 2018 12:51:49 +0000
+
+xbs (0-10) unstable; urgency=low
+
+  * patch from Colin Watson to move to dh-based packaging. Thanks!
+    (Closes: #792988)
+
+ -- Matthew Vernon <matthew@debian.org>  Wed, 29 Jul 2015 17:36:35 +0100
+
+xbs (0-9) unstable; urgency=low
+
+  * patch from Sylvestre Ledru <sylvestre@debian.org> to make this build
+    with clang (Closes: #710387)
+  * patch from Chris Lamb <lamby@debian.org> to make builds reproducible
+    (add -n to gzip invocations) (Closes: #777007)
+
+ -- Matthew Vernon <matthew@debian.org>  Sat, 07 Mar 2015 22:59:59 +0000
+
+xbs (0-8) unstable; urgency=low
+
+  * update Build-Dep from x-dev to x11proto-core-dev (Closes: #515516)
+  * move to newer Standards-Version
+  * tidy up copyright file (thanks to Jari Aalto)
+  * correct typo in man-page (Closes: #354711)
+  * correct hyphens in man-page (thanks to Jari Aalto)
+  * don't strip if DEB_BUILD_OPTIONS=nostrip set (Closes: #438287)
+  * #include <stdlib.h> in xbs.c (thanks to Jari Aalto)
+
+ -- Matthew Vernon <matthew@debian.org>  Thu, 13 May 2010 17:30:49 +0100
+
+xbs (0-7.3) unstable; urgency=low
+
+  * Fix Build-Depends for new X layout (Closes: #346761)
+
+ -- Matthew Vernon <matthew@debian.org>  Sat, 14 Jan 2006 15:39:00 +0000
+	
+xbs (0-7.2) unstable; urgency=low
+
+  * Remove incorrect Build-Depends on debmakr (Closes: #288979)
+  * Tidy up rules to use POSIX chown syntax
+
+ -- Matthew Vernon <matthew@debian.org>  Sat, 15 Jan 2005 18:10:29 +0000
+	
+xbs (0-7.1) unstable; urgency=low
+
+  * NMU.
+  * Add Build-Depends on debmake and xlibs-dev.  Closes: #190623.
+  * Remove /usr/doc/xbs symlink.
+
+ -- Daniel Schepler <schepler@debian.org>  Thu, 21 Aug 2003 00:32:31 -0700
+
+xbs (0-7) unstable; urgency=low
+
+  * #include <string.h> in subs.h (Closes: #126658)
+  * Add several more #includes...
+  * Tidy up a few lintian things (Closes: #126923)
+
+ -- Matthew Vernon <matthew@debian.org>  Sat,  5 Jan 2002 08:06:04 +0000
+	
+xbs (0-6) unstable; urgency=low
+
+  * runex now looks in the correct directory (closes: #102414)
+
+ -- Matthew Vernon <matthew@debian.org>  Wed, 27 Jun 2001 20:23:52 +0100
+	
+xbs (0-5) unstable; urgency=low
+
+  * Change section to science
+
+ -- Matthew Vernon <matthew@debian.org>  Tue, 10 Apr 2001 02:55:18 +0100
+
+xbs (0-4) unstable; urgency=low
+
+  * Move to /usr/share/doc (closes: #91716)
+  * Move to /usr/share/man (closes: #91093)
+
+ -- Matthew Vernon <matthew@debian.org>  Mon, 09 Apr 2001 15:34:56 +0100
+	
+xbs (0-3) unstable; urgency=low
+
+  * Change compiler to gcc (closes: #61587)
+
+ -- Matthew Vernon <matthew@debian.org>  Fri, 17 Nov 2000 20:32:51 +0000
+
+xbs (0-2) unstable; urgency=low
+
+  * New Maintainer
+
+ -- Matthew Vernon <matthew@debian.org>  Tue, 07 Dec 1999 16:22:46 +0000
+
+xbs (0-1) unstable; urgency=low
+
+  * Initial Release.
+
+ -- John Lapeyre <lapeyre@physics.arizona.edu>  Mon,  3 Aug 1998 01:37:50 -0700
+
+

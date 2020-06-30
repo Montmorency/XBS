@@ -1,0 +1,16 @@
+#!/bin/csh -f
+#  makes a tar file BS.tar.Z with all relevant files
+   
+   echo 'Making tar file for xbs...'
+
+   rm -f BS.tar.Z
+   rm -f BS.tar
+
+#   tar -cvf BS.tar README xbs.c *.h bs_icon *.bs *.mv cx
+   tar -cvf BS.tar README License TAR xbs.c *.h bs_icon *.bs *.mv cx* Cha*
+   ls -l BS.*
+   
+   compress BS.tar
+   ls -l BS.*
+
+   exit

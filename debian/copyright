@@ -1,0 +1,16 @@
+This debian package was created by John Lapeyre <lapeyre@physics.arizona.edu> on
+3 Aug 1998 01:37:50 -0700
+
+The source code was obtained from
+http://www.ihp-ffo.de/
+By 2010-05-08, this URL no longer existed. Refer to:
+http://web.archive.org/web/*/http://www.ihp-ffo.de/~msm/
+
+Copyright:
+
+    Copyright (C) 1995 M. Methfessel
+
+License:
+
+This package is distributed under the terms of the GPL, which on most
+Debian systems can be found in /usr/share/common-licenses/GPL
