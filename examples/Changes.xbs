@@ -1,0 +1,12 @@
+
+Changes to the xbs program
+
+
+06.09.97 The program now plots additional straight lines,
+         typically the edges of the unit cell. 
+         Input in the .bs file is like this:
+
+            line    0.0 0.0 0.0   1.0 0.0 0.0
+
+         Plotting of the lines (continuous, dashed or off) is
+         toggled by key L (that is: shift-l) in the program.
