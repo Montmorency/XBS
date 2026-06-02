@@ -59,6 +59,15 @@ d3.select(xbs)
 
 data = FileAttachment("ringmv@1.json").json()
 
+//this is the primary view of tmat
+viewof tmat = new View([[1,0,0],[0,1,0],[0,0,1]])
+
+viewof scale = new View(15.0)
+
+viewof perspective = new View(1)
+viewof bline = new View(false)
+viewof frame_index = new View(0);
+
 xscale =  {
            return d3.scaleLinear()
                        .domain([d3.min(data.atoms.coords, d => atompos_perm(d,1)[0]), 
@@ -397,6 +406,8 @@ pcoords = {
     }
     return p;
 }
+
+projection = new Projection()
 
 ball = {
        //adding species names can select in svg on this attribute
@@ -1029,4 +1040,418 @@ function zoom(projection) {
       .on("start", dragstarted)
       .on("zoom", dragged)
       .on("end", dragended);
+}
+
+function toggle_perspective()
+ { 
+   if (perspective==0){viewof perspective.value = 1;}
+   if (perspective==1){viewof perspective.value = 0;}
+ }
+
+function toggle_wire()
+ { var tmp_bool = !wire
+   if (wire){viewof wire.value = tmp_bool;}
+   if (!wire){viewof wire.value = tmp_bool;}
+ }
+
+function toggle_bline()
+ { var tmp_bool = !bline
+   if (bline){viewof bline.value = tmp_bool;}
+   if (!bline){viewof bline.value = tmp_bool;}
+ }
+
+function wire_fill(ball_colour){
+    // Expecting a ball colour on scale [0,1] which gets converted to gray scale.
+                     if  (wire) {return "none";}
+                     let gscale = ball_colour*256;
+                     if (!wire) {return `rgb(${gscale}, ${gscale}, ${gscale})`;}
+}  
+
+function atompos_perm(loc_p, rad){
+  //pmode=1no perspective to set default scales
+  let zp = Array(3);
+  let zr = 0;
+  //if(pmode == 1){
+    zp[0] = 15*loc_p[0];
+    zp[1] = 15*loc_p[1];
+    zr = 15*rad;
+    zr = MAXRAD;
+    if((dist0-loc_p[2]) > 0) {zr = (15*rad*dist0)/(dist0-loc_p[2])};
+    if(zr > MAXRAD) {zr = MAXRAD};
+    zp[2] = zr;
+    return zp;
+ // }
+}
+
+function line(d){
+  //take list of arc points to draw thick bonds
+  //
+  var lop = []
+  for(let i=0;i<d.length;i++)
+    {lop.push([xscale(d[i].x),yscale(d[i].y)]);
+   }
+  return d3.line()(lop);
+}
+
+function match(str,pat){return str==pat;}
+
+function advance_frame(n){
+  //update data.frame add(or subtract frame num) and mod out length
+  var natom = data.atoms.coords.length;
+  //this is the number of frames list of coords:
+  var nframes = data.frames.coords.length;
+  
+  if (data.frames.coords.length ==0){return ;}
+  
+  var tmp_index = frame_index + n;
+  //console.log(nframes,natom);
+  if (tmp_index<0){tmp_index += nframes+1;}
+  viewof frame_index.value = tmp_index % (nframes);
+    
+  let p = Array(natom);
+  for(let n=0; n<natom;n++){
+    p[n] = Array(3);
+  }
+  
+  //updates glob_coords
+  viewof glob_coords.value = data.frames.coords[frame_index];
+  return;
+}
+
+key_pad = { const svg = d3.select(xbs)
+//           svg.on('keydown', function() {
+//                   const [x, y] = d3.mouse(this);
+//                   svg.append('circle').attr('r', 5).attr('cx', x).attr('cy', y)
+           svg.on("keydown", function(){
+                  switch(d3.event.keyCode)
+                     {  case 39:  //key_right
+                        rotmat(1, dalfa)
+                        break;
+                        case 37:  //key_left
+                        rotmat(1, -dalfa)
+                        break;
+                        case 222: //apostrophe
+                         rotmat(2,dalfa);
+                         break;
+                       case 191:
+                         rotmat(2,-dalfa);
+                         break;
+                       case 188:
+                         rotmat(3,-dalfa);
+                         break;
+                       case 190:
+                         rotmat(3,dalfa);
+                         break;
+                       case 87:
+                         //w: wire
+                         toggle_wire();
+                         break;
+                       case 80:
+                         //p:perspective
+                         toggle_perspective();
+                         break;
+                       case 76:
+                         //l: line bonds (bline)
+                         toggle_bline();
+                         break;
+                       case 187:
+                         //plus:zoom in
+                         viewof scale.value *= 1.05;
+                         break;
+                       case 189:
+                         //plus:zoom in
+                         viewof scale.value /=1.05;
+                         break;
+                       case 219:
+                         //bracket left
+                        advance_frame(-1);
+                        break;
+                       case 221:
+                         //bracket_right
+                         advance_frame(1);
+                         break
+                       case 74:
+                       //switching to j from {
+                         viewof frame_index.value = 0;
+                         viewof glob_coords.value = data.frames.coords[frame_index]
+                       break;
+                       //switching to k from }
+                       case 75:
+                         viewof frame_index.value = data.frames.coords.length-1;
+                         viewof glob_coords.value = data.frames.coords[frame_index]
+                         break;
+                       case 82:
+                         //r reset to home view
+                         viewof tmat.value = [[1,0,0],[0,1,0],[0,0,1]];
+                         break;
+                       
+                      }
+                   }
+                 );
+  };
+
+function sp(a, b)
+//scalar product
+  {
+    var sp1;
+    sp1=a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+    return sp1;
+  }
+
+function vsum(a,b,ca,cb,v)
+  {
+    v[0]=ca*a[0]+cb*b[0];
+    v[1]=ca*a[1]+cb*b[1];
+    v[2]=ca*a[2]+cb*b[2];
+    return;
+  }
+
+ function vscal(a, ca, v)
+//vector times scalar
+  {
+    v[0]=a[0]*ca;
+    v[1]=a[1]*ca;
+    v[2]=a[2]*ca;
+    return;
+  }
+
+function zoom(projection) {
+  let v0, q0, r0;
+  function dragstarted() {
+  //adapted from Bostock
+  //my projection function is not a geoprojection
+  //https://observablehq.com/@d3/versor-dragging
+    v0 = versor.cartesian(projection.invert(d3.mouse(this)));
+    r0 = [0,0,0];
+    q0 = versor(r0);
+  }
+  
+  function dragged() {
+    viewof scale.value = d3.event.transform.k
+    var v1 = versor.cartesian(projection.invert(d3.mouse(this))),
+        q1 = versor.multiply(q0, versor.delta(v0, v1));
+        let eu_angles = versor.rotation(q1);
+        projection.rotate(eu_angles);
+   
+    rotmat(1,eu_angles[0]);
+    rotmat(2,eu_angles[1]);
+    rotmat(3,eu_angles[2]);
+  }
+  function dragended(){
+    return;
+  }
+  return d3.zoom()
+      .on("start", dragstarted)
+      .on("zoom", dragged)
+      .on("end", dragended);
+}
+
+function eumat(alfa=0.0,beta=0.0,gama=0.0){
+  let gam = new Array(3);
+  let bet = new Array(3);
+  let alf = new Array(3);
+  let w = new Array(3);
+  let tmat1 = new Array(3);
+  
+  for (let i=0;i<3;i++){
+    gam[i] = new Array(3);
+    bet[i] = new Array(3);
+    alf[i] = new Array(3);
+    tmat1[i] = new Array(3);
+    w[i] = new Array(3);
+  };
+  
+  gam[0][0]=1.0;        
+  gam[0][1]=0.0;        
+  gam[0][2]=0.0;
+  gam[1][0]=0.0;        
+  gam[1][1]=Math.cos(gama);  
+  gam[1][2]=-Math.sin(gama);
+  gam[2][0]=0.0;        
+  gam[2][1]=Math.sin(gama);  
+  gam[2][2]=1.0;
+  
+  bet[0][0]=Math.cos(beta);  
+  bet[0][1]=0.0;        
+  bet[0][2]=Math.sin(beta);
+  bet[1][0]=0.0;        
+  bet[1][1]=1.0;        
+  bet[1][2]=0.0;
+  bet[2][0]=-Math.sin(beta); 
+  bet[2][1]=0.0;        
+  bet[2][2]=Math.cos(beta);
+  
+  alf[0][0]=Math.cos(alfa);  
+  alf[0][1]=-Math.sin(alfa); 
+  alf[0][2]=0.0;
+  alf[1][0]=Math.sin(alfa);  
+  alf[1][1]=Math.cos(alfa);  
+  alf[1][2]=0.0;
+  alf[2][0]=0.0;        
+  alf[2][1]=0.0;        
+  alf[2][2]=1.0;
+  
+  for(let i=0; i<3; i++) {
+    for(let j=0; j<3; j++) {
+      w[i][j]=0.0;
+      for(let k=0;k<3;k++) {w[i][j]=w[i][j] + bet[i][k]*alf[k][j]};
+    };
+  };
+  
+  for(let i=0; i<3; i++) {
+    for(let j=0; j<3; j++) {
+      tmat1[i][j]=0.0;
+      for(let k=0;k<3;k++){
+        tmat1[i][j] = tmat1[i][j] + gam[i][k]*w[k][j]
+      };
+    };
+  };
+  
+  return tmat1;
+}
+
+function rotmat(ixyz,alfa){
+  let i = 0;
+  let j = 0; 
+  let k =  0;
+  let rot = Array(3);
+  let w = Array(3);
+  
+  for(let i =0; i <3; i++){
+    rot[i] = Array(3);
+    w[i] = Array(3);
+  }
+  
+  switch (ixyz) {
+    case 3:
+      rot[0][0]=Math.cos(alfa);  
+      rot[0][1]=-Math.sin(alfa); 
+      rot[0][2]=0.0;
+      rot[1][0]=Math.sin(alfa);  
+      rot[1][1]=Math.cos(alfa);  
+      rot[1][2]=0.0;
+      rot[2][0]=0.0;        
+      rot[2][1]=0.0;        
+      rot[2][2]=1.0;
+      break;
+    case 1:
+      rot[0][0]=Math.cos(alfa);  
+      rot[0][1]=0.0;        
+      rot[0][2]=Math.sin(alfa);
+      rot[1][0]=0.0;        
+      rot[1][1]=1.0;        
+      rot[1][2]=0.0;
+      rot[2][0]=-Math.sin(alfa); 
+      rot[2][1]=0.0;        
+      rot[2][2]=Math.cos(alfa);
+      break;
+    case 2:
+      rot[0][0]=1.0;        
+      rot[0][1]=0.0;        
+      rot[0][2]=0.0;
+      rot[1][0]=0.0;        
+      rot[1][1]=Math.cos(alfa);  
+      rot[1][2]=-Math.sin(alfa);
+      rot[2][0]=0.0;        
+      rot[2][1]=Math.sin(alfa);  
+      rot[2][2]=Math.cos(alfa);
+      break;
+    default:
+      return;
+    }
+  
+  for(let i=0;i<3;i++){ 
+    for(let j=0;j<3;j++){
+      w[i][j]=0.0;
+      for(let k=0;k<3;k++){
+        w[i][j] = w[i][j] + rot[i][k]*tmat[k][j];
+      }
+    }
+  }
+
+    for(let i=0;i<3;i++){ 
+      for(let j=0;j<3;j++) {
+          tmat[i][j] = w[i][j];
+      }
+    }
+  viewof tmat.value = tmat;
+}
+
+class Projection {
+  //Azimuthal Projection
+  project() {return ;}
+    
+  invert(coord) {
+    var x,y;
+    x = coord[0];
+    y = coord[1];
+    //make sphere cover projected 2D area
+    let R = Math.sqrt(width*width + height*height);
+    var z = Math.sqrt(x * x + y * y),
+        c = asin(z/R),
+        sc = Math.sin(c),
+        cc = Math.cos(c);
+    //console.log(z,c,sc,cc)
+    return [
+      Math.atan2(x * sc, z * cc),
+      asin(z && y * sc / z)
+    ];
+  }
+  
+  rotate(x){
+    return arguments.length ? [x[0],x[1],0]: [0,0,0];
+  }
+}
+
+function haversin(x) {
+  return (x = Math.sin(x / 2)) * x;
+}
+
+/* ----- dbond ------- */
+function dbond(gray,  m1, m2)
+  {
+    const dfac=0.8;
+    const rfac=2.0;
+
+    var r,ax,ay,bx,by,a1,b1,dx,dy,alf,d1,bb,x;
+    var m1 = Array(6);
+    var m2 = Array(6);
+
+    m2[4]=dfac*m2[4]+(1-dfac)*m1[4];
+    m2[5]=dfac*m2[5]+(1-dfac)*m1[5];
+
+    ax=m2[0];
+    ay=m2[1];
+    bx=m2[2];
+    by=m2[3];
+
+    b1=Math.sqrt(bx*bx+by*by);
+    a1=Math.sqrt(ax*ax+ay*ay);
+    r=rfac*b1;
+    m2[0] = -r*ax/a1;
+    m2[1] = -r*ay/a1;
+    m2[2] = r*bx/b1;
+    m2[3] = r*by/b1;
+
+    dx=m2[4]-m1[4];
+    dy=m2[5]-m1[5];
+
+    if(m2[0]*dx<0 || m2[1]*dy<0) {
+      m1[0]=-m1[0]; m1[1]=-m1[1]; m1[2]=-m1[2]; m1[3]=-m1[3];
+      m2[0]=-m2[0]; m2[1]=-m2[1]; m2[2]=-m2[2]; m2[3]=-m2[3];
+    }
+    
+    d1=Math.sqrt(dx*dx+dy*dy);
+    bb=Math.sqrt(m1[2]*m1[2]+m1[3]*m1[3]);
+    if(r-bb<d1) {
+      x=bb*d1/(r-bb);
+      alf=Math.asin(bb/x)*57.3;}
+  }
+
+function asin(x) {
+  return x > 1 ? 0.5*Math.PI : x < -1 ? -0.5*Math.PI : Math.asin(x);
+}
+
+function acos(x) {
+  return x > 1 ? 0 : x < -1 ? Math.PI : Math.acos(x);
 }
