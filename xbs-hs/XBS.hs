@@ -1,4 +1,4 @@
-module D3X.XBS.XBS where
+module XBS where
 
 import D3X.Prelude
 import D3X.Blocks

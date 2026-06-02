@@ -1,0 +1,14 @@
+{
+  "name": "@xbs/xbs-js",
+  "version": "0.1.0",
+  "description": "XBS ball-and-stick molecular viewer — browser spec (Observable port in progress)",
+  "exports": "./xbs.js",
+  "tasks": {
+    "bundle": "deno bundle xbs.js xbs.bundle.js",
+    "check": "deno check xbs.js"
+  },
+  "imports": {
+    "d3": "https://esm.sh/d3@7"
+  },
+  "license": "MIT"
+}

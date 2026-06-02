@@ -1,0 +1,49 @@
+cabal-version:       2.2
+name:                xbs-hs
+version:             0.1.0.0
+synopsis:            Ball-and-stick molecular viewer rendered as SVG via d3x
+description:         A Haskell port of the XBS ball-and-stick viewer. Builds on
+                     d3x for D3-style scales and SVG path primitives, emitting
+                     diagrams through IHP's HSX quasiquoter. Sibling to the
+                     original C implementation (xbs-c) and the browser spec
+                     (xbs-js).
+license:             MIT
+author:              Comhlan Ltd.
+build-type:          Simple
+
+common common-extensions
+    default-extensions:
+        OverloadedStrings
+        , QuasiQuotes
+        , RecordWildCards
+        , ScopedTypeVariables
+        , BangPatterns
+        , FlexibleInstances
+        , FlexibleContexts
+        , OverloadedRecordDot
+        , OverloadedLabels
+
+common common-flags
+    ghc-options:
+        -Wall
+        -Wredundant-constraints
+        -Wunused-imports
+        -fstatic-argument-transformation
+        -funbox-strict-fields
+
+library
+    import: common-extensions, common-flags
+    default-language: GHC2021
+    hs-source-dirs: .
+    exposed-modules:
+        XBS
+    build-depends:
+          base >= 4.17.0 && < 4.22
+        , text
+        , containers
+        , linear
+        , vector
+        , vector-algorithms
+        , lens
+        , ihp-hsx
+        , d3x
