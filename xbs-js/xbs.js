@@ -1,8 +1,39 @@
-/*
-ObservableHQ had a viewof pattern for embedding elemts in a notebook:
 
 consts NPOINTS = 5;
+height = 450
+width = 450
+left_margin = 20
+right_margin = 20
+top_margin = 20
+bottom_margin = 20
+dalfa = 0.08726646259971647
+bndfac = 1
+NPOINTS = 5
+d = Array(3) [0, 0, 250]
+MAXRAD = 100
 
+
+/*
+https://observablehq.com/@d3/versor-dragging
+
+The result of the port is below. The viewer supports wheel based zooming for scaling and an implementation of versor dragging appropriate for atomistic systems. If a keypad is available additional controls can be used to advance frames and toggle perspective, bond linestyle, and atom fill. The philosophy is this observablehq/js implementation lets you upload your atomistic data and conveniently inspect and reorient your system in a browser. You can also embed your images in your own notebooks or webpages. If you wish to fine tune the diagram you can manipulate the svg using d3 tools, or perhaps more conveniently, export the svg file and perform your manipulations by hand in your favourite vector graphics editor. The atoms have id attributes corresponding to their label and number so you can group selections on them and resize/recolour etc.
+
+   left arrow: rotate left
+   right arrow: rotate right
+   ' : rotate up
+   / : rotate down
+   < : rotate counterclockwise
+   > : rotate clockwise
+   p : toggle perspective
+   l : toggle linestyle
+   w : wire frames
+   [ : frame left (film)
+   ] : frame right (film)
+   r : reset to home view
+   j : first frame
+   k : last frame
+
+*/
 
 viewof xbs = { 
     var xbs = DOM.svg(width, height)
@@ -22,6 +53,11 @@ viewof xbs = {
 
 d3.select(xbs)
   .call(zoom(projection));
+
+d3.select(xbs)
+  .call(zoom(projection));
+
+data = FileAttachment("ringmv@1.json").json()
 
 xscale =  {
            return d3.scaleLinear()
