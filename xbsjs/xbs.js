@@ -1,5 +1,9 @@
 /*
 ObservableHQ had a viewof pattern for embedding elemts in a notebook:
+
+consts NPOINTS = 5;
+
+
 viewof xbs = { 
     var xbs = DOM.svg(width, height)
     var svg = d3.select(xbs)
@@ -42,21 +46,24 @@ draw_sticks = {
   // NB atompos(pcoords[])[] pcoords takes place of Methfessel's zp[], zr structs
   // this handles mapping to page coordinates via d3.
             var svg = d3.select(xbs)
-            tmat; //make cell dependent on tmat.
+            tmat; // make cell dependent on tmat
             perspective;
             dist0;
             bline;
             scale;
-  //constants
+            
+  // constants
             const natom = pcoords.length;
             const nbond = stick.length;
             const fudgefac=0.6;
             const gslope = 0;
             const gz0 = 0;
-    //don't think we need these as d3/svg takes care of it:
+            
+  // don't think we need these as d3/svg takes care of it:
             const taux = 0.0; //width/2.0;
             const tauy = 0.0; //height/2.0;
-  //arrays
+            
+  // arrays
             var ip = Array(natom);
             var kbx = Array(16); 
             var abx = Array(16);
@@ -69,7 +76,7 @@ draw_sticks = {
             var m2 = Array(6);       
             var bxy = Array(3);
             var bond_list = [];
-  //counters
+  // counters
             var k = 0;
             var kk = 0;
             var nbx = 0;
@@ -89,90 +96,111 @@ draw_sticks = {
             var x1,y1,x2,y2;
             var x,y;
   
-            midx = 0.0;// width/2.0;
-            midy = 0.0;//height/2.0;
+            midx = 0.0; // width/2.0;
+            midy = 0.0; //height/2.0;
             const max_bond = 16; 
             var p_loc = pcoords.concat();
-//get sorted atom indices `back to front' i.e. along z in page. 
-            for (let i=0; i<natom; i++){
+            
+  // get sorted atom indices `back to front' i.e. along z in page.
+            for (let i=0; i<natom; i++) {
               ip[i] = i;
-            }
+            }            
             var ip_coords = ip.map(function(e, i) {
                   return [e, p_loc[i]];
               });
-
-            var balls_sticks = Array(natom);
-            for (let i=0; i< natom;i++){
-              //balls_sticks[i] = [pcoords[i].concat(), Array(max_bond)]
+            var balls_sticks = Array(natom);            
+            for (let i=0; i< natom; i++){
               balls_sticks[i] = [pcoords[i].concat(), Array()];
             }
-  
-            for(let n =0; n<natom; n++){
+            
+            for (let n = 0; n < natom; n++) {
+              // k is an index
               k = ip_coords[n][0];  
               rk = ball[k].rad;
-              nbx = 0;
-              for (let j=0; j< nbond; j++){
-                if(k == stick[j].start){
+              
+/*  ------ make list of bonds to this atom ----- */              
+              nbx = 0;              
+              for (let j=0; j < nbond; j++) {
+                if(k == stick[j].start) {
                    kbx[nbx] = j;
                    abx[nbx] = stick[j].end;
                    nbx++;
                 }
-                else if (k==stick[j].end){
+                else if (k == stick[j].end) {
                   kbx[nbx] = j;
                   abx[nbx] = stick[j].start;
                   nbx++;
                   };
                 };
-              if(nbx==0){continue;};
-              for(let m=0; m<nbx; m++){
+                
+              if (nbx==0) { continue; };
+              
+              for (let m=0; m<nbx; m++){
                 fbx[m]=0;
               };
-              //find `bottom' atom of bondlist
-              for (let m=0; m<nbx; m++){
+              
+              // find `bottom' atom of bondlist
+              for (let m=0; m<nbx; m++) {
                   var bot = 1.e10;
                   var ibot = 0;
                 
-                  for(let j=0;j<nbx;j++){
-                    if(ip_coords[abx[j]][1][2] < bot && !fbx[j]) {bot = ip_coords[abx[j]][1][2]; ibot=j;};
+                  for (let j=0; j < nbx; j++) {
+                    if (ip_coords[abx[j]][1][2] < bot && !fbx[j]) {
+                       bot = ip_coords[abx[j]][1][2];
+                       ibot=j;
+                       };
                   }
                     pbx[m] = ibot;
                     fbx[ibot]=1;
                 }
-                
-              for (let ibx=0; ibx<nbx; ibx++){
+
+/*  ------ inner loop over bonds ----- */
+
+              for (let ibx=0; ibx < nbx; ibx++) {
                   jbx = pbx[ibx];
                   kk = abx[jbx];
                   ib = kbx[jbx];
+                  
                   //if (ib<0) printf("this cannot happen\n");
+                  
                   rkk = ball[kk].rad; 
                 
-                  if (ib>=0){
+                  if (ib >= 0) {
                     br = bndfac*stick[ib].rad;
                     vsum(atompos(ip_coords[kk][1], rkk), atompos(ip_coords[k][1], rk),1.0,-1.0, bxy);
+                    
                     bx = bxy[0];
                     by = bxy[1];
                     xx = Math.sqrt(bx*bx +by*by);
                     if (xx*xx < 0.0001) continue;
-                  //Find projection of bond?
+                    
+                  // Find projection of bond?
                     bx = bx/xx;
                     by = by/xx;
+                    
                     vsum(d, ip_coords[k][1],  1.0, -1.0, q1);
                     vsum(d, ip_coords[kk][1], 1.0, -1.0, q2);
                     vsum(ip_coords[kk][1], ip_coords[k][1], 1.0, -1.0, b);
+                    
                     cth1 =  sp(q1,b) / Math.sqrt(sp(q1,q1)*sp(b,b));
-                    cth2 = -sp(q2,b) / Math.sqrt(sp(q2,q2)*sp(b,b));
                     th1=Math.acos(cth1);
+                    
+                    cth2 = -sp(q2,b) / Math.sqrt(sp(q2,q2)*sp(b,b));                    
                     th2=Math.acos(cth2);
                     
                     crit1 = Math.asin(br/rk) * fudgefac;
                     if (crit1<0.0) crit1=0.0;
+                    
                     crit2 = Math.asin(br/rkk) * fudgefac;
                     if (crit2<0.0) crit2=0.0;
                     
-                    note=0;
+                    note = 0;
                     if((th2-0.5*Math.PI > crit2) && (k<kk)) note=1;
                     if((th1-0.5*Math.PI < crit1) && (k>kk)) note=2;
-                    if (note == 1 || note==2){  
+
+                    /* ------- plot a stick ------ */
+                    
+                    if (note == 1 || note==2) {  
                       
                       w = Math.sqrt(rk*rk - br*br);
                       sth1 = Math.sqrt(1.0-cth1*cth1);
@@ -203,17 +231,23 @@ draw_sticks = {
                       
                       beta = Math.exp(gslope*(0.5*(ip_coords[k][1][2]+ip_coords[kk][1][2])-gz0)*gslope);
                     
-                    //plot stick
+                    // plot stick
+                    
                       if (bline){
-                    //bonds as lines
-                        midx = 0;
-                        midy = 0;                    
                         x1 = m1[4];
                         y1 = m1[5];
+                        
                         x2 = m2[4];
                         y2 = m2[5];
-                        balls_sticks[k][1].push({x1:xscale(x1),y1:yscale(y1),x2:xscale(x2),y2:yscale(y2)}) 
-                        }
+                        
+                        balls_sticks[k][1].push (
+                          { x1:xscale(x1), y1:yscale(y1)
+                          , x2:xscale(x2), y2:yscale(y2)
+                          }
+                        ) 
+                      }
+                        
+                    // thick bond with narrowing towards vanishing point 
                       else if(!bline){
                           var pp = Array(NPOINTS*2+1);
                           for (let i=0; i<NPOINTS; i++) {
@@ -229,15 +263,16 @@ draw_sticks = {
                           pp[2*NPOINTS]=pp[0];
                           balls_sticks[k][1].push(pp.concat());
                       }
-                  }//note
+                  } // note
                } //ib
-             }//ibx
-         }//k/n
+             } //ibx
+         } //k /n
          draw_balls_3(balls_sticks);
 }
 
 function draw_balls_3(balls_sticks) {
-          //balls_stick  [[[x,y,z],[bonds]]]
+          // balls_stick  [[[x,y,z], [bonds]]] <- see how overloaded lists are here... could
+          // use an object i suppose?
           var svg = d3.select(xbs)
           var pos;
           var bonds;
@@ -246,13 +281,12 @@ function draw_balls_3(balls_sticks) {
           dist0;
           bline;
           scale;
-  //sort on z coordinate:
-      //    balls_sticks.sort(function(a,b){return a[0][2]-b[0][2];});
   
       var flag = Array(natom);
       var ip = Array(natom);
   
     //Just stick with Methfessels way don't try to do anything stupid.
+    
       for(let k=0; k<natom; k++){ 
         flag[k]=0;
       }
@@ -260,22 +294,25 @@ function draw_balls_3(balls_sticks) {
       for(let n=0; n<natom; n++) {
          let bot = 1.0e10; 
          let ibot = 0;
-         for(let k=0;k<natom;k++)
-           if(pcoords[k][2]<bot && !flag[k]) 
+         
+         for (let k=0; k < natom; k++) {
+           if (pcoords[k][2] < bot && !flag[k]) 
                { bot = pcoords[k][2]; 
                  ibot = k; 
                }
-         ip[n]=ibot; flag[ibot]=1;
+           }
+         ip[n]=ibot;
+         flag[ibot]=1;
         }
-  //      console.log(ip)
-  //scrub paths and circles everytime
+        
+     // scrub paths and circles everytime <- this is inefficient?
           svg.selectAll("circle").remove();
           svg.selectAll("path").remove();
           
-          
-          for (let k =0; k< natom; k++){
+          for (let k  = 0; k < natom; k++) {
             let i = ip[k];
             pos = balls_sticks[i][0].concat();
+            
             svg.append("circle")
                  .attr("id",`${ball[i].spec}${i}`)
                  .attr("cx", xscale(atompos(pos, ball[i].rad)[0]))
@@ -295,16 +332,17 @@ function draw_balls_3(balls_sticks) {
                 })
               }
               else if(!bline){
-                bonds.forEach( d=>{
+                bonds.forEach(d=> {
                 svg.append("path")
                    .style("stroke", "black")
                    .style("fill", "black")
                    .attr("d", line(d));
                 })
                }
-         }//natoms
+         } // natoms
 }
 
+// Take the global atomic coordinates and rotate them according to tmat.
 pcoords = {
   frame_index;
   let natom = data.atoms.coords.length;
@@ -322,21 +360,26 @@ pcoords = {
       }
     }
     return p;
-  }
-
+}
 
 ball = {
        //adding species names can select in svg on this attribute
         const natoms = data.atoms.species.length;
         const nspecies = data.species.length;
+        
         var ball = Array(natoms);
+        
         var spec;
+        
         for (let i=0;i<natoms; i++){
           spec = data.atoms.species[i];
           for (let j =0; j<nspecies;j++){
-            if (spec==data.species[j].name)
-               {
-                ball[i] = {rad:parseFloat(data.species[j].r), spec:spec, colour:data.species[j].colour};
+            if (spec == data.species[j].name)
+           {
+             ball[i] = { rad:parseFloat(data.species[j].r)
+                       , spec:spec
+                       , colour:data.species[j].colour
+                       };
                }
            }
        }
@@ -350,9 +393,6 @@ stick = {
   
   let max_bonds = nbas*16 //maximum 16 bonds per atom.
   var stick = [];
-  //for (let i=0;i<max_bonds;i++){
-  //  stick[i] = {start:0,end:0,rad:0,gray:0,col:0}
-  //}
   
   let i = 0;
   let kb = 0;
@@ -363,19 +403,21 @@ stick = {
   for(let k=0; k<nbas; k++){
     for(let l=k+1; l<nbas; l++){
       kb = -1
-      for(let j=0; j<nbondtypes; j++){
+      for (let j=0; j < nbondtypes; j++) {
         if (match(data.atoms.species[k], data.bonds[j].name1) && 
             match(data.atoms.species[l], data.bonds[j].name2)){kb=j};
+            
         if (match(data.atoms.species[l], data.bonds[j].name1) && 
             match(data.atoms.species[k], data.bonds[j].name2)){kb=j};
-      }      
+      }
+      
       if (kb>-1) {
       dis=0.0;
-      for (let m=0; m < 3; m++){
-        //dd = data.atoms.coords[k][m]-data.atoms.coords[l][m];
+      for (let m=0; m < 3; m++) {
         dd = glob_coords[k][m]-glob_coords[l][m];
         dis = dis+dd*dd;
       }
+      
       dis = Math.sqrt(dis);
         if ((dis>= data.bonds[kb].min_length) && (dis<=data.bonds[kb].max_length)){
              i++;
@@ -434,6 +476,7 @@ function atompos(loc_p, rad){
     zp[1] = scale*loc_p[1];
     zr = scale*rad;
     zr = MAXRAD;
+    
     if((dist0-loc_p[2]) > 0) {zr = (scale*rad*dist0)/(dist0-loc_p[2])};
     if(zr > MAXRAD) {zr = MAXRAD};
     
@@ -446,6 +489,7 @@ function atompos(loc_p, rad){
    vscal(loc_p, 1.0, y);
    xxx = -sp(y,q)/sp(q,q);
    vsum(y, q, 1.0, xxx, y);
+   
    if(sp(y,y)<=1e-3){ 
      y[0]=1.0; 
      y[1]=0.0; 
@@ -458,6 +502,7 @@ function atompos(loc_p, rad){
     vsum(q, y, a, -b, v2);
     vsum(loc_p, v1, 1.0, 1.0, v1);
     vsum(loc_p, v2, 1.0, 1.0, v2);
+    
     za1 = scale*v1[0]*dist0 / (dist0-v1[2]);
     za2 = scale*v1[1]*dist0 / (dist0-v1[2]);
     zb1 = scale*v2[0]*dist0 / (dist0-v2[2]);
@@ -482,19 +527,20 @@ arc = {
     arc[i][1] = Math.cos(phi);
   };
        
-  return arc;}
+  return arc;
+  }
 
 function line(d){
   //take list of arc points to draw thick bonds
   //
   var lop = []
   for(let i=0;i<d.length;i++)
-    {lop.push([xscale(d[i].x),yscale(d[i].y)]);
+    {lop.push([xscale(d[i].x), yscale(d[i].y)]);
    }
   return d3.line()(lop);
 }
 
-function match(str,pat){return str==pat;}
+function match(str,pat) {return str == pat;}
 
 function advance_frame(n){
   //update data.frame add(or subtract frame num) and mod out length
@@ -617,7 +663,7 @@ class Projection {
   }
 }
 
-function rotmat(ixyz,alfa){
+function rotmat(ixyz, alfa){
   let i = 0;
   let j = 0; 
   let k =  0;
@@ -816,7 +862,9 @@ function dbond(gray,  m1, m2)
 
     b1=Math.sqrt(bx*bx+by*by);
     a1=Math.sqrt(ax*ax+ay*ay);
+    
     r=rfac*b1;
+    
     m2[0] = -r*ax/a1;
     m2[1] = -r*ay/a1;
     m2[2] = r*bx/b1;
@@ -831,10 +879,13 @@ function dbond(gray,  m1, m2)
     }
     
     d1=Math.sqrt(dx*dx+dy*dy);
+    
     bb=Math.sqrt(m1[2]*m1[2]+m1[3]*m1[3]);
+    
     if(r-bb<d1) {
       x=bb*d1/(r-bb);
-      alf=Math.asin(bb/x)*57.3;}
+      alf=Math.asin(bb/x)*57.3;
+      }
   }
 
 function haversin(x) {
@@ -847,4 +898,99 @@ function asin(x) {
 
 function acos(x) {
 return x > 1 ? 0 : x < -1 ? Math.PI : Math.acos(x);
+}
+
+function eumat(alfa=0.0,beta=0.0,gama=0.0){
+  let gam = new Array(3);
+  let bet = new Array(3);
+  let alf = new Array(3);
+  let w = new Array(3);
+  let tmat1 = new Array(3);
+  
+  for (let i=0;i<3;i++){
+    gam[i] = new Array(3);
+    bet[i] = new Array(3);
+    alf[i] = new Array(3);
+    tmat1[i] = new Array(3);
+    w[i] = new Array(3);
+  };
+  
+  gam[0][0]=1.0;        
+  gam[0][1]=0.0;        
+  gam[0][2]=0.0;
+  gam[1][0]=0.0;        
+  gam[1][1]=Math.cos(gama);  
+  gam[1][2]=-Math.sin(gama);
+  gam[2][0]=0.0;        
+  gam[2][1]=Math.sin(gama);  
+  gam[2][2]=1.0;
+  
+  bet[0][0]=Math.cos(beta);  
+  bet[0][1]=0.0;        
+  bet[0][2]=Math.sin(beta);
+  bet[1][0]=0.0;        
+  bet[1][1]=1.0;        
+  bet[1][2]=0.0;
+  bet[2][0]=-Math.sin(beta); 
+  bet[2][1]=0.0;        
+  bet[2][2]=Math.cos(beta);
+  
+  alf[0][0]=Math.cos(alfa);  
+  alf[0][1]=-Math.sin(alfa); 
+  alf[0][2]=0.0;
+  alf[1][0]=Math.sin(alfa);  
+  alf[1][1]=Math.cos(alfa);  
+  alf[1][2]=0.0;
+  alf[2][0]=0.0;        
+  alf[2][1]=0.0;        
+  alf[2][2]=1.0;
+  
+  for(let i=0; i<3; i++) {
+    for(let j=0; j<3; j++) {
+      w[i][j]=0.0;
+      for(let k=0;k<3;k++) {w[i][j]=w[i][j] + bet[i][k]*alf[k][j]};
+    };
+  };
+  
+  for(let i=0; i<3; i++) {
+    for(let j=0; j<3; j++) {
+      tmat1[i][j]=0.0;
+      for(let k=0;k<3;k++){
+        tmat1[i][j] = tmat1[i][j] + gam[i][k]*w[k][j]
+      };
+    };
+  };
+  
+  return tmat1;
+}
+
+function zoom(projection) {
+  let v0, q0, r0;
+  function dragstarted() {
+  //adapted from Bostock
+  //my projection function is not a geoprojection
+  //https://observablehq.com/@d3/versor-dragging
+    v0 = versor.cartesian(projection.invert(d3.mouse(this)));
+    r0 = [0,0,0];
+    q0 = versor(r0);
+  }
+  
+  function dragged() {
+    viewof scale.value = d3.event.transform.k
+    var v1 = versor.cartesian(projection.invert(d3.mouse(this))),
+        q1 = versor.multiply(q0, versor.delta(v0, v1));
+        let eu_angles = versor.rotation(q1);
+        projection.rotate(eu_angles);
+   
+    rotmat(1,eu_angles[0]);
+    rotmat(2,eu_angles[1]);
+    rotmat(3,eu_angles[2]);
+  }
+  function dragended(){
+    return;
+  }
+  return d3.zoom()
+      .on("start", dragstarted)
+      .on("zoom", dragged)
+      .on("end", dragended);
 }
