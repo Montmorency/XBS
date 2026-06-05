@@ -6,13 +6,13 @@
     # ihp-hsx, so we don't need ihp's own overlay).
     ihp.url = "github:digitallyinduced/ihp";
     nixpkgs.follows = "ihp/nixpkgs";
-
     # d3x supplies the scale typeclasses, d3Line primitives, etc. that xbs-hs
     # builds on. Sourced as a sibling checkout; share ihp + nixpkgs so the
     # Haskell package set stays coherent across the whole tree.
-    d3x.url = "path:../../ihp-projects/d3x";
-    d3x.inputs.ihp.follows = "ihp";
-    d3x.inputs.nixpkgs.follows = "nixpkgs";
+        d3x = {
+            url = "path:/Users/lambert/projects/ihp-projects/d3x";
+            flake = false;
+        };
   };
 
   outputs =
