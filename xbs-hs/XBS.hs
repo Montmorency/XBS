@@ -181,11 +181,13 @@ drawBallAndSticks config tmat (ball, sticks) =
     drawOneBond  = plotBond config (rot ball) . rotStick
 
 -- | One bond's geometry as Picture primitives (points only; d3Line/SVG lives in
---   the interpreter). Empty when the bond isn't drawn (see note gate).
+--   the interpreter). `stick` already visits each bond once, and the C/JS note
+--   gate is effectively always-draw (it only chose draw-timing), so we draw
+--   unconditionally — keeping just the degenerate-projection skip (C: xx²<1e-4).
 plotBond :: Config -> Ball -> Stick -> Picture
 plotBond config ballk sortedStick = let
          ballkk = sortedStick.end
-         
+
          -- paper-space bond delta (C bs_kernel: zp[kk]-zp[k] via atompos),
          -- normalised to the unit screen bond direction (C: bx/=xx, by/=xx).
          V3 bdx bdy _ = atomPos perspective ballkk.pos ballkk.rad
@@ -193,60 +195,47 @@ plotBond config ballk sortedStick = let
          xx = sqrt (bdx^2 + bdy^2)
          bx = bdx / xx
          by = bdy / xx
-         -- continue if xx*xx < 0.0001
-         -- if (xx^2 < 0.0001)
-         -- then mempty
-         --  else 
+
          q1 = d ^-^ ballk.pos
          q2 = d ^-^ ballkk.pos
-         -- 3D model-space bond vector (C bs_kernel: b[3] = p[kk]-p[k]); feeds th1/th2
+         -- 3D model-space bond vector (C bs_kernel: b[3] = p[kk]-p[k])
          b = ballkk.pos ^-^ ballk.pos
 
          -- cosines of the view/bond angle at each end (C: cth1, cth2 — note cth2's sign)
          cth1 =        dot q1 b  / sqrt (quadrance q1 * quadrance b)
          cth2 = negate (dot q2 b) / sqrt (quadrance q2 * quadrance b)
-         th1  = acos cth1
-         th2  = acos cth2
 
-         br  = bndfac * sortedStick.rad   -- C: br  = bndfac*stick[ib].rad
-         rk  = ballk.rad                  -- C: rk  = ball[k].rad
-         rkk = ballkk.rad                 -- C: rkk = ball[kk].rad
+         br = bndfac * sortedStick.rad    -- C: br = bndfac*stick[ib].rad
 
-         crit1 = let tmp = asin (br/rk) * fudgefac
-                 in if (tmp < 0.0) then 0.0 else tmp
-                                                 
-         crit2 = let tmp = asin (br/rkk) * fudgefac
-                 in if (tmp < 0.0) then 0.0 else tmp
-         
-         note = setNote th2 th1 crit1 crit2
-         
-  in if note == 1 || note == 2
-       then
-            -- these aren't necessarily anything to do with plucker
-            -- coords but it gives a convenient 6 element vector
-            let Plucker m10 m11 m12 m13 m14 m15 = calcM perspective bx by br ballk  cth1
-                Plucker m20 m21 m22 m23 m24 m25 = calcM perspective bx by br ballkk cth2
-                -- TODO(gray-ramp): beta = exp (gslope*(0.5*(k_z+kk_z)-gz0)*gslope) per atom z's
-            in if config.bline
-                 then Picture [Polyline [V2 m14 m15, V2 m24 m25] "black"] -- straight thin line
-                 else Picture [Polygon                                    -- thick tapered cap outline
-                      ( map (\(V2 arcX arcY) -> V2 (m10*arcX + m12*arcY + m14)
-                                                   (m11*arcX + m13*arcY + m15)) arcs
-                     ++ map (\(V2 arcX arcY) -> V2 (m20*arcX + m22*arcY + m24)
-                                                   (m21*arcX + m23*arcY + m25)) (reverse arcs)
-                      ) "black"]
-       else mempty
+         -- the two bond-cap 6-vectors (C m1[]/m2[]); caps offset toward each other
+         Plucker m10 m11 m12 m13 m14 m15 = calcM perspective KEnd  bx by br ballk  cth1
+         Plucker m20 m21 m22 m23 m24 m25 = calcM perspective KKEnd bx by br ballkk cth2
+  in if xx*xx < 0.0001            -- atoms project to ~the same point: skip
+       then mempty
+       else if config.bline
+              then Picture [Polyline [V2 m14 m15, V2 m24 m25] "black"] -- straight thin line
+              else Picture [Polygon                                    -- thick tapered cap outline
+                   ( map (\(V2 arcX arcY) -> V2 (m10*arcX + m12*arcY + m14)
+                                                (m11*arcX + m13*arcY + m15)) arcs
+                  ++ map (\(V2 arcX arcY) -> V2 (m20*arcX + m22*arcY + m24)
+                                                (m21*arcX + m23*arcY + m25)) (reverse arcs)
+                   ) "black"]
 
 -- | Per-end bond-cap 6-vector, mirroring C bs_kernel's m1[]/m2[] (subs.h ~1248).
 --   bx,by,br are bond-level (need both atoms + the stick), so they stay params;
 --   rk and the projected (kx,ky,zk) are unpacked from this end's ball.
 --   cth = cos of the view/bond angle at this end.
+-- which end of the bond a cap belongs to; toggles the sign of the ww offset so
+-- the two caps move TOWARD each other (C: +bx*ww at k, -bx*ww at kk).
+data BondEnd = KEnd | KKEnd
+
 calcM :: Perspective                 -- render mode (threaded to atomPos)
+      -> BondEnd                     -- which end (sets the ww-offset sign)
       -> Double -> Double -> Double  -- bx by br  (shared bond quantities)
       -> Ball                        -- this end's atom (gives rk + its projection)
       -> Double                      -- cth
       -> Plucker Double
-calcM persp bx by br ball cth =
+calcM persp end bx by br ball cth =
   let rk          = ball.rad
       V3 kx ky zk = atomPos persp ball.pos ball.rad   -- paper (x,y) + projected radius (zr)
       w   = sqrt (rk*rk - br*br)   -- C uses sqrt here; the port had dropped it
@@ -254,14 +243,9 @@ calcM persp bx by br ball cth =
       ww  = w * sth * zk / rk
       bb  = br * zk / rk
       aa  = br * cth * zk / rk
-  in Plucker (bx*aa) (by*aa) (-by*bb) (bx*bb) (kx + bx*ww + taux) (ky + by*ww + tauy)
+      off = case end of KEnd -> ww; KKEnd -> negate ww   -- C: zp[k]+bx*ww vs zp[kk]-bx*ww
+  in Plucker (bx*aa) (by*aa) (-by*bb) (bx*bb) (kx + bx*off + taux) (ky + by*off + tauy)
 
--- | Bond-cap visibility test (C bs_kernel note). The C also gated on atom
---   indices k<kk / k>kk purely to draw each bond once; `stick` already pairs
---   each bond once (triangular), so we drop the indices and keep the angle tests.
-setNote th2 th1 crit1 crit2 | th2 - 0.5*pi > crit2 = 1
-                            | th1 - 0.5*pi < crit1 = 2
-                            | otherwise            = 0
 tauy = 0.0
 taux = 0.0
 fudgefac = 0.6
