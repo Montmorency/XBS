@@ -91,7 +91,7 @@ data Prim = Disc     Double Double Double Text  -- ^ cx cy r  fill   (atom)
 newtype Picture = Picture [Prim]
   deriving (Eq, Show, Semigroup, Monoid)
 
-defConfig = Config { bline = True
+defConfig = Config { bline = False   -- C default (pmode): thick cylinders, not lines
                    , dist0 = 250
                    , scale = 15
                    }
@@ -217,8 +217,8 @@ plotBond config ballk sortedStick = let
               else Picture [Polygon                                    -- thick tapered cap outline
                    ( map (\(V2 arcX arcY) -> V2 (m10*arcX + m12*arcY + m14)
                                                 (m11*arcX + m13*arcY + m15)) arcs
-                  ++ map (\(V2 arcX arcY) -> V2 (m20*arcX + m22*arcY + m24)
-                                                (m21*arcX + m23*arcY + m25)) (reverse arcs)
+                  ++ map (\(V2 arcX arcY) -> V2 (-m20*arcX + m22*arcY + m24)  -- C/JS: -m2[0],-m2[1]
+                                                (-m21*arcX + m23*arcY + m25)) (reverse arcs)
                    ) "black"]
 
 -- | Per-end bond-cap 6-vector, mirroring C bs_kernel's m1[]/m2[] (subs.h ~1248).
