@@ -173,7 +173,9 @@ atomPos persp locP rad
 --   rotation can change their relative depth).
 drawBallAndSticks :: Config -> Mat3 -> (Ball, [Stick]) -> Picture
 drawBallAndSticks config tmat (ball, sticks) =
-    plotAtom (rot ball) <> foldMap drawOneBond sortedSticks
+    -- bonds first, then the atom on top: the atom covers its own near-caps,
+    -- while the bond shafts (outside the atom radius) stay visible.
+    foldMap drawOneBond sortedSticks <> plotAtom (rot ball)
   where
     rot b        = b { pos = tmat !* b.pos }              -- ball into view space
     rotStick stk = stk { end = rot stk.end }              -- only .end is used downstream
@@ -278,27 +280,40 @@ plotAtom ball =
   let V3 px py pr = atomPos perspective ball.pos ball.rad   -- paper x,y + projected radius
   in Picture [Disc (px + taux) (py + tauy) pr "gray"]       -- TODO: fill from ball.gray/rgb
 
--- d3-style paper→viewport scales: map the data extent into the canvas, inside
--- the margins. y is flipped (SVG y points down: max paper-y → top margin).
--- STUB / TODO: preserve aspect (single uniform scale so atoms stay circular and
---   to scale Disc radii); fold pan (taux/tauy) and interactive zoom in here.
-xScale :: (Double, Double) -> Double -> Double
-xScale dom = coordVal . linearScale (Domain dom)
-                                    (Range (Length left_margin, Length (width - right_margin)))
+-- A 2D viewport transform: maps x, y and a length/radius (each Double->Double).
+-- Local for now; may promote to a d3x multi-dimensional scale type later, driven
+-- by downstream backends.
+type Transform2D = (Double -> Double, Double -> Double, Double -> Double)
 
-yScale :: (Double, Double) -> Double -> Double
-yScale dom = coordVal . linearScale (Domain dom)
-                                    (Range (Length (height - bottom_margin), Length top_margin))
+-- | One uniform paper→viewport scale, built on d3x's LinearScale (Domain→Range).
+--   The SAME factor maps x, y AND r (so atoms stay round and flush with bonds —
+--   cf. C hardcopy: balls+sticks share one space, radius used directly). The
+--   data extent (x,y Domains) is fitted inside the margins, centred, y flipped
+--   (SVG y points down). Returns (mapX, mapY, mapR).
+--   TODO: fold pan (taux/tauy) + interactive zoom in here.
+viewportScale :: Domain Double -> Domain Double -> Transform2D
+viewportScale (Domain (mnx, mxx)) (Domain (mny, mxy)) =
+    ( \x -> width  / 2 + s (x - cx0)
+    , \y -> height / 2 - s (y - cy0)        -- flip y
+    , s )
+  where
+    maxSpan = max 1e-9 (max (mxx - mnx) (mxy - mny))
+    avail   = min (width - left_margin - right_margin)
+                  (height - top_margin - bottom_margin)
+    -- one factor via d3x: map a delta in [0,maxSpan] → [0,avail]
+    s d     = coordVal (linearScale (Domain (0, maxSpan)) (Range (Length 0, Length avail)) d)
+    cx0     = 0.5 * (mnx + mxx)
+    cy0     = 0.5 * (mny + mxy)
 
--- bounding box of all primitive coords (minX,maxX,minY,maxY); Nothing if empty
-pictureExtent :: Picture -> Maybe (Double, Double, Double, Double)
+-- the data extent as x and y Domains (Nothing if the Picture is empty)
+pictureExtent :: Picture -> Maybe (Domain Double, Domain Double)
 pictureExtent (Picture prims) = case concatMap coords prims of
     [] -> Nothing
-    ps -> Just ( minimum (map vx ps), maximum (map vx ps)
-               , minimum (map vy ps), maximum (map vy ps) )
+    ps -> Just ( Domain (minimum (map vx ps), maximum (map vx ps))
+               , Domain (minimum (map vy ps), maximum (map vy ps)) )
   where
     vx (V2 x _) = x ; vy (V2 _ y) = y
-    coords (Disc cx cy _ _) = [V2 cx cy]
+    coords (Disc cx cy r _) = [V2 (cx-r) (cy-r), V2 (cx+r) (cy+r)]  -- include the disc, not just its centre
     coords (Polyline p _)   = p
     coords (Polygon  p _)   = p
 
@@ -307,11 +322,11 @@ pictureExtent (Picture prims) = case concatMap coords prims of
 renderSvg :: Picture -> Html
 renderSvg pic@(Picture prims) = foldMap prim prims
   where
-    (sx, sy) = case pictureExtent pic of
-                 Just (mnx, mxx, mny, mxy) -> (xScale (mnx, mxx), yScale (mny, mxy))
-                 Nothing                   -> (id, id)
+    (sx, sy, sr) = case pictureExtent pic of
+                     Just (dx, dy) -> viewportScale dx dy
+                     Nothing       -> (id, id, id)
     pt (V2 x y) = V2 (sx x) (sy y)
-    prim (Disc cx cy r fill)   = [hsx|<circle cx={tshow (sx cx)} cy={tshow (sy cy)} r={tshow r} fill={fill} stroke="black"/>|]
+    prim (Disc cx cy r fill)   = [hsx|<circle cx={tshow (sx cx)} cy={tshow (sy cy)} r={tshow (sr r)} fill={fill} stroke="black"/>|]
     prim (Polyline pts stroke) = [hsx|<path d={d3Line (map pt pts)} fill="none" stroke={stroke}/>|]
     prim (Polygon  pts fill)   = [hsx|<path d={d3Line (map pt pts) <> "Z"} fill={fill} stroke="black"/>|]
 

@@ -112,6 +112,29 @@ main = hspec $ do
     it "has 4 distinct bond-map keys (C-C, C-O, O-C, O-O)" $
       M.size bondMap `shouldBe` 4
 
+  describe "loadBs — grpht.bs (4 carbon sublattices, RGB colours, switches)" $ do
+    src <- runIO (readFile "../examples/grpht.bs")
+    let (config, balls, bondMap) = loadBs src
+
+    it "reads all 72 atoms" $
+      length balls `shouldBe` 72
+
+    it "picks up all four carbon species (C, C1, C2, C3)" $
+      mapM_ (\sp -> (sp `elem` map (.species) balls) `shouldBe` True)
+            ["C", "C1", "C2", "C3"]
+
+    it "joins atoms with the 3-value-RGB spec radius (0.288)" $
+      (head balls).rad `shouldBe` 0.288
+
+    it "has in-plane C–C (max 0.75) and inter-sublattice C–C1 (max 1.37) bonds" $ do
+      let Just cc  = M.lookup ("C", "C")  bondMap
+          Just cc1 = M.lookup ("C", "C1") bondMap
+      cc.maxLength  `shouldBe` 0.75
+      cc1.maxLength `shouldBe` 1.37
+
+    it "reads switches → bline = False (cylinders)" $
+      config.bline `shouldBe` False
+
 -- gray is stored as Float (realToFrac from the parsed Double), so compare ~approximately
 approx :: Float -> Float -> Bool
 approx target x = abs (x - target) < 1e-4

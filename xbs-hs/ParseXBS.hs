@@ -35,7 +35,8 @@ data BsLine = LAtom   Text Double Double Double                 -- ^ atom  sp x 
             | LBonds  Text Text Double Double Double Double      -- ^ bonds s1 s2 min max radius gray
             | LTmat   [Double]                                  -- ^ tmat  (9 floats)
             | LScalar Text Double                               -- ^ scale/dist/inc/rfac/bfac …
-            | LIgnore                                           -- ^ '*' comments, line, switches, blank, unknown
+            | LSwitches [Int]                                   -- ^ switches: pixmap numbers gray BLINE wire bonds recenter PMODE shadow
+            | LIgnore                                           -- ^ '*' comments, line, blank, unknown
             deriving (Eq, Show)
 
 -- a whitespace-delimited word (consumes leading spaces)
@@ -78,9 +79,10 @@ pLine = pSpaces *>
    (    LAtom   <$  pSymbol "atom"  <*> pText <*> pNum <*> pNum <*> pNum
    <<|> LSpec   <$  pSymbol "spec"  <*> pText <*> pNum <*> pNum
    <<|> LBonds  <$  pSymbol "bonds" <*> pText <*> pText <*> pNum <*> pNum <*> pNum <*> pNum
-   <<|> LTmat   <$  pSymbol "tmat"  <*> pRestNums
-   <<|> LScalar <$> pScalarKw <*> pNum
-   <<|> LIgnore <$  pMunch (const True)
+   <<|> LTmat     <$  pSymbol "tmat"     <*> pRestNums
+   <<|> LSwitches <$  pSymbol "switches" <*> (map round <$> pRestNums)
+   <<|> LScalar   <$> pScalarKw <*> pNum
+   <<|> LIgnore   <$  pMunch (const True)
    )
   where
     pScalarKw = T.pack <$> ( pSymbol "scale" <<|> pSymbol "dist" <<|> pSymbol "inc"
@@ -120,7 +122,14 @@ loadBs src = (config, balls, bondMap)
     tmat0 = case [ ds | LTmat ds <- ls ] of
               (ds : _) -> toMat3 ds
               _        -> init_tmat
-    config = defConfig { tmat = tmat0 }
+    -- switches: …gray BLINE(idx 3) wire bonds recenter PMODE(idx 7) shadow
+    switches0 = case [ ss | LSwitches ss <- ls ] of (ss : _) -> ss; _ -> []
+    bline0    = atDef switches0 3 0 == 1            -- bline: 1 = lines, 0 = cylinders
+    config    = defConfig { tmat = tmat0, bline = bline0 }
+
+-- safe list index with default
+atDef :: [a] -> Int -> a -> a
+atDef xs i d = case drop i xs of (x:_) -> x; _ -> d
 
 toMat3 :: [Double] -> Mat3
 toMat3 [a,b,c, d,e,f, g,h,i] = V3 (V3 a b c) (V3 d e f) (V3 g h i)
