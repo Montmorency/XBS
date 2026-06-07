@@ -77,7 +77,7 @@ data Bond = Bond { sp1       :: SpeciesName
                  , minLength :: MinLength
                  , maxLength :: MaxLength
                  , radius    :: Radius
-                 , col       :: Int        -- colour-palette index (matches Stick/Ball col)
+                 , gray      :: Color      -- the .bs "color" field is a gray 0..1 (feeds Stick.gray)
                  }
 
 -- Backend-neutral drawing IR. The geometry fold produces a Picture (a free
@@ -280,8 +280,8 @@ stick bondMap (ball1 : balls) = (ball1, catMaybes (map (\ball2 -> case M.lookup 
                                                  if ((dis >= bond.minLength) && dis <= bond.maxLength)
                                                  then Just (Stick { start = ball1, end = ball2
                                                                   , rad = bond.radius
-                                                                  , gray = 0.5  -- TODO: from palette/gmode (C GRAY0)
-                                                                  , col = bond.col })
+                                                                  , gray = bond.gray
+                                                                  , col = 0 })  -- palette index unused (b/w)
                                                  else Nothing) balls)) : (stick bondMap balls)
 
 -- | Whole scene → Picture: z-order atoms back to front, then foldMap the core
@@ -295,12 +295,40 @@ plotAtom ball =
   let V3 px py pr = atomPos perspective ball.pos ball.rad   -- paper x,y + projected radius
   in Picture [Disc (px + taux) (py + tauy) pr "gray"]       -- TODO: fill from ball.gray/rgb
 
+-- d3-style paper→viewport scales: map the data extent into the canvas, inside
+-- the margins. y is flipped (SVG y points down: max paper-y → top margin).
+-- STUB / TODO: preserve aspect (single uniform scale so atoms stay circular and
+--   to scale Disc radii); fold pan (taux/tauy) and interactive zoom in here.
+xScale :: (Double, Double) -> Double -> Double
+xScale dom = coordVal . linearScale (Domain dom)
+                                    (Range (Length left_margin, Length (width - right_margin)))
+
+yScale :: (Double, Double) -> Double -> Double
+yScale dom = coordVal . linearScale (Domain dom)
+                                    (Range (Length (height - bottom_margin), Length top_margin))
+
+-- bounding box of all primitive coords (minX,maxX,minY,maxY); Nothing if empty
+pictureExtent :: Picture -> Maybe (Double, Double, Double, Double)
+pictureExtent (Picture prims) = case concatMap coords prims of
+    [] -> Nothing
+    ps -> Just ( minimum (map vx ps), maximum (map vx ps)
+               , minimum (map vy ps), maximum (map vy ps) )
+  where
+    vx (V2 x _) = x ; vy (V2 _ y) = y
+    coords (Disc cx cy _ _) = [V2 cx cy]
+    coords (Polyline p _)   = p
+    coords (Polygon  p _)   = p
+
 -- | SVG interpreter (d3x/hsx). Other backends (blank-canvas, eps, …) are just
 --   more interpreters over the same Picture.
 renderSvg :: Picture -> Html
-renderSvg (Picture prims) = foldMap prim prims
+renderSvg pic@(Picture prims) = foldMap prim prims
   where
-    prim (Disc cx cy r fill)     = [hsx|<circle cx={tshow cx} cy={tshow cy} r={tshow r} fill={fill} stroke="black"/>|]
-    prim (Polyline pts stroke)   = [hsx|<path d={d3Line pts} fill="none" stroke={stroke}/>|]
-    prim (Polygon  pts fill)     = [hsx|<path d={d3Line pts <> "Z"} fill={fill} stroke="black"/>|]
+    (sx, sy) = case pictureExtent pic of
+                 Just (mnx, mxx, mny, mxy) -> (xScale (mnx, mxx), yScale (mny, mxy))
+                 Nothing                   -> (id, id)
+    pt (V2 x y) = V2 (sx x) (sy y)
+    prim (Disc cx cy r fill)   = [hsx|<circle cx={tshow (sx cx)} cy={tshow (sy cy)} r={tshow r} fill={fill} stroke="black"/>|]
+    prim (Polyline pts stroke) = [hsx|<path d={d3Line (map pt pts)} fill="none" stroke={stroke}/>|]
+    prim (Polygon  pts fill)   = [hsx|<path d={d3Line (map pt pts) <> "Z"} fill={fill} stroke="black"/>|]
 

@@ -39,6 +39,7 @@ library
     hs-source-dirs: .
     exposed-modules:
         XBS
+        , ParseXBS
     build-depends:
           base >= 4.17.0 && < 4.22
         , text
@@ -49,3 +50,21 @@ library
         , lens
         , ihp-hsx
         , d3x
+        , uu-parsinglib
+
+-- xbs-render: load each .bs file and write an .svg next to it.
+--   nix run .#xbs-render -- examples/ch4.bs      (once exposed in the flake)
+--   cabal run xbs-render -- examples/ch4.bs      (inside nix develop)
+executable xbs-render
+    import: common-extensions, common-flags
+    default-language: GHC2021
+    hs-source-dirs: app
+    main-is: Main.hs
+    build-depends:
+          base >= 4.17.0 && < 4.22
+        , xbs-hs
+        , d3x
+        , ihp-hsx
+        , vector
+        , text
+        , filepath

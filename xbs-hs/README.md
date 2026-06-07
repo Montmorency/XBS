@@ -1,6 +1,5 @@
 xbs-hs flow:
 
-
   stick      :: BondMap -> [Ball] -> [(Ball,[Stick])]              -- build once
   drawScene  :: Config -> Mat3 -> V.Vector (Ball,[Stick]) -> Picture   -- z-sort atoms, foldMap
     └ drawBallAndSticks :: Config -> Mat3 -> (Ball,[Stick]) -> Picture -- rotate (view space), z-sort bonds
