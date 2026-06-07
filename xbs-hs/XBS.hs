@@ -1,29 +1,54 @@
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE OverloadedLabels #-}
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE NoFieldSelectors #-}
+
 module XBS where
 
 import D3X.Prelude
-import D3X.Blocks
+import D3X.Blocks hiding (dot)  -- dot = Linear.dot (vector) here, not the SVG circle
 import D3X.Scales
+import D3X.Path (d3Line, PathStr)
 
-import Linear
+import IHP.HSX.MarkupQQ (hsx)
+import IHP.HSX.Markup (Html)
+
+import Linear hiding (perspective)  -- we define our own render-mode `perspective`
 import Linear.Quaternion (rotate)
+import Linear.Plucker    (Plucker(..))  -- used as a convenient 6-element carrier
 
+import qualified Data.Map as M
 import qualified Data.Vector as V
 import qualified Data.Vector.Algorithms.Merge as VAM  -- stable merge sort
 
 import           Data.Ord     (comparing)
+import           Data.Maybe   (catMaybes)
+import           Data.List    (sortOn)
 import           Control.Lens ((^.))
 import           Linear.V3    (V3, _z)
 
 -- XBS Top Types
 type Perspective = Bool
 
+-- Monomorphise linear's parametric V3/M33 to Double for all XBS geometry.
+-- Value-level `V3 x y z` constructors stay; these aliases are for type positions.
+type Vec3 = V3 Double          -- a 3-vector of coordinates
+type Mat3 = M33 Double         -- = V3 (V3 Double), a 3x3 transform matrix
+
 data Config = Config { bline :: Bool
                      , dist0 :: Float
                      , scale :: Float
-                     , tmat :: M33
+                     , tmat :: Mat3
                      }
 
-data Ball = Ball { pos :: V3
+data Ball = Ball { pos :: Vec3
                  , rad :: Radius
                  , gray :: Color
                  , rgb :: Color
@@ -39,16 +64,31 @@ data Stick = Stick { start :: Ball
                    , col :: Int
                    }
 
-data BotCoord = BotCoord Float Int IPVec FlagVec
 
 type SpeciesName = Text
   
-type MinLength = Float
-type MaxLength = Float
-type Radius    = Float
-type Color     = Float                          
+type MinLength = Double   -- physics: compared against model-space bond lengths (Double)
+type MaxLength = Double   -- physics: ditto
+type Radius    = Double   -- physics-adjacent: feeds the projection geometry
+type Color     = Float    -- presentation: gray/colour value
 
-data Bond = Bond SpeciesName SpeciesName MinLength MaxLength Radius Color
+data Bond = Bond { sp1       :: SpeciesName
+                 , sp2       :: SpeciesName
+                 , minLength :: MinLength
+                 , maxLength :: MaxLength
+                 , radius    :: Radius
+                 , col       :: Int        -- colour-palette index (matches Stick/Ball col)
+                 }
+
+-- Backend-neutral drawing IR. The geometry fold produces a Picture (a free
+-- monoid of primitives); each backend has its own interpreter (renderSvg via
+-- d3x, renderCanvas via blank-canvas, ...). Nothing SVG/canvas-specific here.
+data Prim = Disc     Double Double Double Text  -- ^ cx cy r  fill   (atom)
+          | Polyline [V2 Double] Text           -- ^ pts      stroke (thin bond)
+          | Polygon  [V2 Double] Text           -- ^ pts      fill   (thick bond)
+
+newtype Picture = Picture [Prim]
+  deriving (Semigroup, Monoid)
 
 defConfig = Config { bline = True
                    , dist0 = 250
@@ -63,7 +103,8 @@ dfac = 0.8
 rfac = 2.0
 npoints = 5
 
-init_tmat = M33 (V3 1 0 0) (V3 0 1 0) (V3 0 0 1)
+init_tmat :: Mat3
+init_tmat = V3 (V3 1 0 0) (V3 0 1 0) (V3 0 0 1)  -- M33 a = V3 (V3 a); no M33 constructor
 
 height = 450
 width = 450
@@ -73,88 +114,102 @@ top_margin = 20
 bottom_margin = 20
 dalfa = 0.08726646259971647
 bndfac = 1
-maxrad = 100
+-- render globals (C uses these as globals; Config mirrors them for later threading)
+maxRad = 100                -- C MAXRAD: cap on projected radius
+scale = 15                  -- C `fac`: overall plot scale
+perspective :: Perspective  -- C pmode==1 "pseudo" perspective; False = projection branch
+perspective = False
+
 
 -- This is to accumulate the atomic ordering from bottom to top along
 ------- sort atoms back to front ----- 
-sortByZ :: Ord a => V.Vector (V3 a) -> V.Vector (V3 a)
-sortByZ = V.modify (VAM.sortBy (comparing (^. _z)))
+-- sort balls (with their sticks) back to front by their rotated z
+sortByZ :: Mat3 -> V.Vector (Ball, [Stick]) -> V.Vector (Ball, [Stick])
+sortByZ tmat = V.modify (VAM.sortBy (comparing (\(ball, _) -> (tmat !* ball.pos) ^. _z)))
 
-phiVec i = let phi = i*pi/(npoints-1) in V2 (-1.0*(sin phi)) (cos phi))
+phiVec i = let phi = i*pi/(npoints-1) in V2 (-1.0*(sin phi)) (cos phi)
 arcs = phiVec <$> [0 .. npoints-1]
 
-xScale minX maxX = linearScale Domain (minX, maxX) (Range leftMargin (width - rightMargin))
-yScale minY maxY = linearScale Domain (minY, maxY) (Range bottomMargin (top - topMargin))
-  
-pcoords :: [(Atom, V3)] -> M33 -> [(Atom, V3)]
-pcoords globCoords tmat = (tmat :: M33) ^*^ V3
 
-d3Line :: [V2] -> SvgPath
-d3Line = ... fill this in D3X.Path...
-  
--- We need a d3Line function takes a list of points?  
-plotBonds :: Bool -> (V3, [(V3, V3)])  -> Html
-plotBonds bLine (atom, bonds) = if bLine
-                                then mapM plotThinBond bonds
-                                else mapM plotThickBond bonds
-  
 
 checkZero vec = if (abs(norm vec) < 0.0001)
                    then V3 1 0 0
                    else vec
 
-line bonds = d3Line $ map (\atom -> V2 (xScale . _x atom) (yScale . _y atom) bonds
+-- TODO(scaling): bond/atom coords still need to pass through xScale/yScale into
+-- the SVG viewport before d3Line. Sketch (clashed with D3X.Blocks.line, unused):
+--   toViewport bonds = d3Line $
+--     map (\a -> V2 (coordVal (xScale minX maxX (a ^. _x)))
+--                   (coordVal (yScale minY maxY (a ^. _y)))) bonds
 
-atomPos :: V3 -> Radius -> V3
-atomPos locP rad scale =
-  let                      
-    q = locP - (V3 0 0 dist0)
-    y = checkZero (locP |+| (((dot locP (locP - d)) / (norm q)) |* q))
-    a = (rad^2)/(norm q)
-    b = rad * (sqrt ((1+a) / (quadrance y)))
-    
-    V3 v1x v1y v1z = a *^ q ^+^ (b *^ y)
-    V3 v2x v2y v2z = a *^ q ^-^ (b *^ y)
-    
-    za1 = (scale*v1x*dist0) / (dist0 - v1z)
-    za2 = (scale*v1y*dist0) / (dist0 - v1z)
-    
-    zb1 = (scale*v2x*dist0) / (dist0 - v2z)
-    zb2 = (scale*v2y*dist0) / (dist0 - v2z)
-  in
-    if perspective
-    then let
-            zr' = rad*dist0 / (dist0 - (locP ! 2))
-            zr = if (((dist0 - (locP ! 2)) > 0) && (zr' < maxRad))
-                  then zr'
-                  else maxRad
-         in ((V3 (locP ^. _x) (locP ^. _y) zr) |* scale)
-    else V3 (0.5*(za1+zb2)) (0.5*(za2+zb2)) (0.5 * sqrt((ab1-za1)^2) + (zb2-za2)^2)
+-- | Project an atom to paper: returns V3 (paperX) (paperY) (projectedRadius).
+--   Faithful port of C atompos (subs.h ~189); render mode passed in (C pmode),
+--   `scale`/`dist0` still globals for now.
+atomPos :: Perspective -> Vec3 -> Radius -> Vec3
+atomPos persp locP rad
+  | persp =                             -- C pmode==1 "pseudo" perspective (subs.h ~196)
+      let denom = dist0 - locP ^. _z
+          zr | denom > 0 = min (scale * rad * dist0 / denom) maxRad
+             | otherwise = maxRad
+      in V3 (scale * locP ^. _x) (scale * locP ^. _y) zr
+  | otherwise =                         -- C projection branch (subs.h ~206)
+      let q = locP ^-^ d                -- d = V3 0 0 dist0
+          y = checkZero (locP ^-^ ((dot locP q / quadrance q) *^ q))
+          a = negate (rad*rad) / quadrance q
+          b = rad * sqrt ((1 + a) / quadrance y)
+          V3 v1x v1y v1z = locP ^+^ (a *^ q ^+^ b *^ y)
+          V3 v2x v2y v2z = locP ^+^ (a *^ q ^-^ b *^ y)
+          za1 = scale*v1x*dist0 / (dist0 - v1z)
+          za2 = scale*v1y*dist0 / (dist0 - v1z)
+          zb1 = scale*v2x*dist0 / (dist0 - v2z)
+          zb2 = scale*v2y*dist0 / (dist0 - v2z)
+          zr  = 0.5 * sqrt ((zb1-za1)^2 + (zb2-za2)^2)
+      in V3 (0.5*(za1+zb1)) (0.5*(za2+zb2)) zr
   
-drawBallAndSticks config tmat ballAndSticks@(ball,sticks) = do
-       let
-         -- | rotate bonds and sort back to front on z
-         sortedSticks = (sortOn (\stick -> stick ^. (.ball) . (.pos) . _z)
-                         map (\stick -> (tmat ^*^ stick.ball.pos)) sticks)
+-- | Core fold step: render one atom + its bonds into the Picture IR.
+--   Applies the tmat rotation here (so sorting and drawing share view-space
+--   coords), then z-sorts this atom's bonded neighbours back-to-front (the
+--   rotation can change their relative depth).
+drawBallAndSticks :: Config -> Mat3 -> (Ball, [Stick]) -> Picture
+drawBallAndSticks config tmat (ball, sticks) =
+    plotAtom (rot ball) <> foldMap drawOneBond sortedSticks
+  where
+    rot b        = b { pos = tmat !* b.pos }              -- ball into view space
+    rotStick stk = stk { end = rot stk.end }              -- only .end is used downstream
+    sortedSticks = sortOn (\stk -> (rot stk.end).pos ^. _z) sticks
+    drawOneBond  = plotBond config (rot ball) . rotStick
 
-        in map (plotBond config ball) sortedSticks
-
+-- | One bond's geometry as Picture primitives (points only; d3Line/SVG lives in
+--   the interpreter). Empty when the bond isn't drawn (see note gate).
+plotBond :: Config -> Ball -> Stick -> Picture
 plotBond config ballk sortedStick = let
          ballkk = sortedStick.end
          
-         b@(V3 bx by _)  = atompos(ballkk) ^-^ atompos(ballk)
-         
-         xx = sqrt(bx^2 + by^2)
+         -- paper-space bond delta (C bs_kernel: zp[kk]-zp[k] via atompos),
+         -- normalised to the unit screen bond direction (C: bx/=xx, by/=xx).
+         V3 bdx bdy _ = atomPos perspective ballkk.pos ballkk.rad
+                    ^-^ atomPos perspective ballk.pos  ballk.rad
+         xx = sqrt (bdx^2 + bdy^2)
+         bx = bdx / xx
+         by = bdy / xx
          -- continue if xx*xx < 0.0001
          -- if (xx^2 < 0.0001)
          -- then mempty
          --  else 
          q1 = d ^-^ ballk.pos
          q2 = d ^-^ ballkk.pos
+         -- 3D model-space bond vector (C bs_kernel: b[3] = p[kk]-p[k]); feeds th1/th2
          b = ballkk.pos ^-^ ballk.pos
 
-         th1 = acos (((dot q1 b))/(sqrt(quadrance q1 *  quadrance b)))
-         th2 = acos ((dot q2 b)/(sqrt(quadrance q2 * quadrance b)))
+         -- cosines of the view/bond angle at each end (C: cth1, cth2 — note cth2's sign)
+         cth1 =        dot q1 b  / sqrt (quadrance q1 * quadrance b)
+         cth2 = negate (dot q2 b) / sqrt (quadrance q2 * quadrance b)
+         th1  = acos cth1
+         th2  = acos cth2
+
+         br  = bndfac * sortedStick.rad   -- C: br  = bndfac*stick[ib].rad
+         rk  = ballk.rad                  -- C: rk  = ball[k].rad
+         rkk = ballkk.rad                 -- C: rkk = ball[kk].rad
 
          crit1 = let tmp = asin (br/rk) * fudgefac
                  in if (tmp < 0.0) then 0.0 else tmp
@@ -162,81 +217,90 @@ plotBond config ballk sortedStick = let
          crit2 = let tmp = asin (br/rkk) * fudgefac
                  in if (tmp < 0.0) then 0.0 else tmp
          
-         note = setNote th2 th1 crit1 crit2 k kk
+         note = setNote th2 th1 crit1 crit2
          
-         when (note == 1 | note == 2) do
-            let  
-            -- | these aren't necessarily anything to do with plucker
-            --   coords but it gives a convenient 6 element vector
-              m1@(Plucker m10 m11 m12 m13 m14 m15) = calcM ballk th1
-              m2@(Plucker m20 m21 m22 m23 m24 m25) = calcM ballkk th2
-              
-              beta = exp (gslope*(0.5*(k_z + kk_z)-gz0)*gslope)
+  in if note == 1 || note == 2
+       then
+            -- these aren't necessarily anything to do with plucker
+            -- coords but it gives a convenient 6 element vector
+            let m1@(Plucker m10 m11 m12 m13 m14 m15) = calcM perspective bx by br ballk  cth1
+                m2@(Plucker m20 m21 m22 m23 m24 m25) = calcM perspective bx by br ballkk cth2
+                k_z  = ballk.pos  ^. _z          -- C: p[k][2]
+                kk_z = ballkk.pos ^. _z          -- C: p[kk][2]
+                beta = exp (gslope*(0.5*(k_z + kk_z)-gz0)*gslope)
+            in if config.bline
+                 then Picture [Polyline [V2 m14 m15, V2 m24 m25] "black"] -- straight thin line
+                 else Picture [Polygon                                    -- thick tapered cap outline
+                      ( map (\(V2 arcX arcY) -> V2 (m10*arcX + m12*arcY + m14)
+                                                   (m11*arcX + m13*arcY + m15)) arcs
+                     ++ map (\(V2 arcX arcY) -> V2 (m20*arcX + m22*arcY + m24)
+                                                   (m21*arcX + m23*arcY + m25)) (reverse arcs)
+                      ) "black"]
+       else mempty
 
-              if bline
-                then d3Line [(V2 m14 m15), (V2 m24 m25)] -- Straight thin line
-                else d3Line
-                     (map (\(V2 arcX arcY) ->
-                            let x =  m10*arcX + m12*arcY + m14
-                                y =  m11*arcX + m13*arcY + m15
-                            in V2 x y
-                         ) arcs
-                     ++
-                     (map (\(V2 arcX arcY) ->
-                            let x =  m20*arcX + m22*arcY + m24
-                                y =  m21*arcX + m23*arcY + m25
-                            in V2 x y
-                         ) (reverse arcs))
-                     )
+-- | Per-end bond-cap 6-vector, mirroring C bs_kernel's m1[]/m2[] (subs.h ~1248).
+--   bx,by,br are bond-level (need both atoms + the stick), so they stay params;
+--   rk and the projected (kx,ky,zk) are unpacked from this end's ball.
+--   cth = cos of the view/bond angle at this end.
+calcM :: Perspective                 -- render mode (threaded to atomPos)
+      -> Double -> Double -> Double  -- bx by br  (shared bond quantities)
+      -> Ball                        -- this end's atom (gives rk + its projection)
+      -> Double                      -- cth
+      -> Plucker Double
+calcM persp bx by br ball cth =
+  let rk          = ball.rad
+      V3 kx ky zk = atomPos persp ball.pos ball.rad   -- paper (x,y) + projected radius (zr)
+      w   = sqrt (rk*rk - br*br)   -- C uses sqrt here; the port had dropped it
+      sth = sqrt (1.0 - cth*cth)
+      ww  = w * sth * zk / rk
+      bb  = br * zk / rk
+      aa  = br * cth * zk / rk
+  in Plucker (bx*aa) (by*aa) (-by*bb) (bx*bb) (kx + bx*ww + taux) (ky + by*ww + tauy)
 
-calcM ball cth = let
-              (x,y) = ((,) <$> _x <*> _y) atompos ball
-              w = ball.rad^2 - br^2
-              sth = sqrt (1.0-cth*cth);
-              ww = w*sth*kz / rk
-              bb = br*zk/rk
-              aa = br*cth*zk/rk
-        in Plucker (bx*aa) (by*aa) (-by*bb) (bx*bb) (kx + bx*ww + taux) (ky + by*ww + tauy)
-
--- | looks like we are trying to sort out the quadrant of acos/asin?
-setNote th2 th1 crit1 crit2 k kk | ((th2-0.5*Math.PI > crit2) && (k<kk)) = 1
-                                 | ((th1-0.5*Math.PI < crit1) && (k<kk)) = 2
-                                 | otherwise = 0
-tauy, taux = 0.0
-fudgefac=0.6;
-gslope = 0;
+-- | Bond-cap visibility test (C bs_kernel note). The C also gated on atom
+--   indices k<kk / k>kk purely to draw each bond once; `stick` already pairs
+--   each bond once (triangular), so we drop the indices and keep the angle tests.
+setNote th2 th1 crit1 crit2 | th2 - 0.5*pi > crit2 = 1
+                            | th1 - 0.5*pi < crit1 = 2
+                            | otherwise            = 0
+tauy = 0.0
+taux = 0.0
+fudgefac = 0.6
+gslope = 0
+gz0 = 0      -- C gz0: gray-ramp z0 (set via `gramp`; default 0)
  
-type BondMap =  M.Map ((Text,Text), Bond)
+type BondMap = M.Map (Text, Text) Bond
 stick :: BondMap -> [Ball] -> [(Ball, [Stick])]
+stick _ [] = []
 stick bondMap (ball1 : balls) = (ball1, catMaybes (map (\ball2 -> case M.lookup (ball1.species, ball2.species) bondMap of
                                              Nothing -> Nothing
                                              Just bond -> let
                                                  dis = norm (ball1.pos ^-^ ball2.pos)
                                                in
                                                  if ((dis >= bond.minLength) && dis <= bond.maxLength)
-                                                 then Just (Stick ball1 ball2 bond.radius bond.col)
+                                                 then Just (Stick { start = ball1, end = ball2
+                                                                  , rad = bond.radius
+                                                                  , gray = 0.5  -- TODO: from palette/gmode (C GRAY0)
+                                                                  , col = bond.col })
                                                  else Nothing) balls)) : (stick bondMap balls)
 
-drawBalls3 :: Config -> V.Vector (Ball, [Stick]) -> Html
-drawBalls3 config ballsAndSticks = 
-  V.foldM (\plot (ball, sticks) -> do
-                 plot
-                 plotAtom ball
-                 forEach sticks plotBonds 
-                ) mempty (sortByZ ballsAndSticks)    
+-- | Whole scene → Picture: z-order atoms back to front, then foldMap the core
+--   step over them. Backend-neutral; pick an interpreter (renderSvg/…) after.
+drawScene :: Config -> Mat3 -> V.Vector (Ball, [Stick]) -> Picture
+drawScene config tmat = foldMap (drawBallAndSticks config tmat) . sortByZ tmat
 
--- | Print target could be swapped e.g. change directives for
---   canvas, eps, tikz etc ...
-  
-plotThinBond = [hsx| <path stroke="black" fill="black" d={d3Line } |]
-plotThickBond =  [hsx| <path stroke="black" fill="black" d={thickLine b} |]
-    
-plotAtom (atomCoord, radius) atomAttrs = [hsx| <circle 
-                                                 cx={(xScale . _x . atomPos) atomCoord}
-                                                 cy={(yScale . _y . atomPos)  atomCoord}
-                                                 r={2*r}
-                                                 fill={fill}
-                                                 stroke="black"
-                                                 />
-                                             |]
-  
+-- | One atom as a Disc primitive (ball is expected already in view space).
+plotAtom :: Ball -> Picture
+plotAtom ball =
+  let V3 px py pr = atomPos perspective ball.pos ball.rad   -- paper x,y + projected radius
+  in Picture [Disc (px + taux) (py + tauy) pr "gray"]       -- TODO: fill from ball.gray/rgb
+
+-- | SVG interpreter (d3x/hsx). Other backends (blank-canvas, eps, …) are just
+--   more interpreters over the same Picture.
+renderSvg :: Picture -> Html
+renderSvg (Picture prims) = foldMap prim prims
+  where
+    prim (Disc cx cy r fill)     = [hsx|<circle cx={tshow cx} cy={tshow cy} r={tshow r} fill={fill} stroke="black"/>|]
+    prim (Polyline pts stroke)   = [hsx|<path d={d3Line pts} fill="none" stroke={stroke}/>|]
+    prim (Polygon  pts fill)     = [hsx|<path d={d3Line pts <> "Z"} fill={fill} stroke="black"/>|]
+

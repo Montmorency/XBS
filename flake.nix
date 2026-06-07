@@ -2,8 +2,10 @@
   description = "XBS rosetta stone — the ball-and-stick molecular viewer in three tongues: the original C (xbs-c), a Haskell port over d3x (xbs-hs), and a browser spec (xbs-js)";
 
   inputs = {
-    # ihp is used only to pin nixpkgs (its Hackage snapshot already carries
-    # ihp-hsx, so we don't need ihp's own overlay).
+    # ihp pins nixpkgs AND supplies ihp-hsx 1.6 from its master source tree.
+    # We can't take ihp-hsx from the nixpkgs Hackage snapshot: that's still
+    # 1.5.0 (blaze backend + IHP.HSX.Parser only), and d3x needs the 1.6
+    # ByteString-Builder backend (IHP.HSX.Markup / IHP.HSX.MarkupQQ).
     ihp.url = "github:digitallyinduced/ihp";
     nixpkgs.follows = "ihp/nixpkgs";
     # d3x supplies the scale typeclasses, d3Line primitives, etc. that xbs-hs
@@ -31,9 +33,8 @@
           system:
           f {
             inherit system;
-            # self.overlays.default adds both d3x and xbs-hs to haskellPackages
-            # via committed default.nix files (no IFD). ihp-hsx is resolved from
-            # the pinned nixpkgs Hackage snapshot.
+            # self.overlays.default adds ihp-hsx 1.6, d3x and xbs-hs to
+            # haskellPackages via committed default.nix files (no IFD).
             pkgs = import nixpkgs {
               inherit system;
               overlays = [ self.overlays.default ];
@@ -42,15 +43,24 @@
         );
     in
     {
-      # Inject d3x and xbs-hs into haskellPackages following IHP's no-IFD
-      # convention: callPackage a committed cabal2nix output rather than
-      # callCabal2nix. d3x's source comes from the flake input; xbs-hs is local.
-      # The cabal files are the spec; the default.nix files mirror them (kept in
-      # lockstep via `nix run nixpkgs#cabal2nix`). ihp-hsx resolves from nixpkgs.
+      # Inject ihp-hsx 1.6, d3x and xbs-hs into haskellPackages following IHP's
+      # no-IFD convention: callPackage a committed cabal2nix output rather than
+      # callCabal2nix. ihp-hsx's source is IHP's master tree (the `ihp` input);
+      # d3x's source comes from its flake input; xbs-hs is local. The cabal files
+      # are the spec; the default.nix files mirror them (kept in lockstep via
+      # `nix run nixpkgs#cabal2nix`).
+      #
+      # All three go through this one haskellPackages set, so they share the same
+      # profiling settings — no mismatch between ihp-hsx and its dependents.
       overlays.default = final: prev: {
         haskellPackages = prev.haskellPackages.override (old: {
           overrides = prev.lib.composeExtensions (old.overrides or (_: _: { })) (
             hfinal: hprev: {
+              # Build ihp-hsx 1.6 from the pinned IHP source. The committed
+              # default.nix labels itself version "1.5.0" (stale cabal2nix
+              # metadata) but `src = ./.` is the 1.6.0 tree, so GHC registers it
+              # as 1.6.0 — satisfying d3x's `ihp-hsx >= 1.6` bound.
+              ihp-hsx = hfinal.callPackage "${ihp}/ihp-hsx/default.nix" { };
               d3x = hfinal.callPackage "${d3x}/default.nix" { };
               xbs-hs = hfinal.callPackage ./xbs-hs/default.nix { };
             }

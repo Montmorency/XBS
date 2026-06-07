@@ -22,6 +22,8 @@ common common-extensions
         , FlexibleContexts
         , OverloadedRecordDot
         , OverloadedLabels
+        , DuplicateRecordFields
+        , NoFieldSelectors
 
 common common-flags
     ghc-options:
