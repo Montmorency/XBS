@@ -80,3 +80,38 @@ main = hspec $ do
 
     it "stores bond rules symmetrically (H–C too)" $
       isJust (M.lookup ("H", "C") bondMap) `shouldBe` True
+
+  describe "loadBs — ring.bs (cage, 60 C + 2 O)" $ do
+    -- reads the real example file; cabal test runs with cwd = xbs-hs/
+    src <- runIO (readFile "../examples/ring.bs")
+    let (_config, balls, bondMap) = loadBs src
+
+    it "reads all 62 atoms" $
+      length balls `shouldBe` 62
+
+    it "has 60 C and 2 O" $ do
+      length [ b | b <- balls, b.species == "C" ] `shouldBe` 60
+      length [ b | b <- balls, b.species == "O" ] `shouldBe` 2
+
+    it "carries per-species gray (C .67, O .50)" $ do
+      (head [ b | b <- balls, b.species == "C" ]).gray `shouldSatisfy` approx 0.67
+      (head [ b | b <- balls, b.species == "O" ]).gray `shouldSatisfy` approx 0.50
+
+    it "reads the first atom's position (exact)" $
+      (head balls).pos `shouldBe` V3 (-1.314) (-0.015) 6.623
+
+    it "reads the last atom (an O) position (exact)" $
+      (last balls).pos `shouldBe` V3 8.050 0.0 3.040
+
+    it "builds a C–O bond rule (max 3, radius 0.143), both orderings" $ do
+      let Just b = M.lookup ("C", "O") bondMap
+      b.maxLength `shouldBe` 3.0
+      b.radius    `shouldBe` 0.143
+      isJust (M.lookup ("O", "C") bondMap) `shouldBe` True
+
+    it "has 4 distinct bond-map keys (C-C, C-O, O-C, O-O)" $
+      M.size bondMap `shouldBe` 4
+
+-- gray is stored as Float (realToFrac from the parsed Double), so compare ~approximately
+approx :: Float -> Float -> Bool
+approx target x = abs (x - target) < 1e-4

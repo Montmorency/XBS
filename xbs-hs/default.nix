@@ -18,6 +18,7 @@ mkDerivation {
     base d3x filepath ihp-hsx text vector
   ];
   testHaskellDepends = [ base containers hspec linear text ];
+  doCheck = false;   # tests read ../examples (not in the nix src); run via `cabal test`
   doHaddock = false;
   description = "Ball-and-stick molecular viewer rendered as SVG via d3x";
   license = lib.licenses.mit;
