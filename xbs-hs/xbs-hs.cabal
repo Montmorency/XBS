@@ -30,6 +30,8 @@ common common-flags
         -Wall
         -Wredundant-constraints
         -Wunused-imports
+        -Wno-type-defaults
+        -Wno-missing-signatures
         -fstatic-argument-transformation
         -funbox-strict-fields
 
@@ -68,3 +70,19 @@ executable xbs-render
         , vector
         , text
         , filepath
+
+-- Parser tests (hspec), grown modularly as ParseXBS gains formats.
+--   cabal test            (inside nix develop)
+test-suite xbs-test
+    import: common-extensions, common-flags
+    default-language: GHC2021
+    type: exitcode-stdio-1.0
+    hs-source-dirs: test
+    main-is: Spec.hs
+    build-depends:
+          base >= 4.17.0 && < 4.22
+        , xbs-hs
+        , hspec
+        , containers
+        , text
+        , linear

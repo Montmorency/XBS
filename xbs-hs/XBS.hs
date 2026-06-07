@@ -86,9 +86,10 @@ data Bond = Bond { sp1       :: SpeciesName
 data Prim = Disc     Double Double Double Text  -- ^ cx cy r  fill   (atom)
           | Polyline [V2 Double] Text           -- ^ pts      stroke (thin bond)
           | Polygon  [V2 Double] Text           -- ^ pts      fill   (thick bond)
+          deriving (Eq, Show)
 
 newtype Picture = Picture [Prim]
-  deriving (Semigroup, Monoid)
+  deriving (Eq, Show, Semigroup, Monoid)
 
 defConfig = Config { bline = True
                    , dist0 = 250
@@ -223,11 +224,9 @@ plotBond config ballk sortedStick = let
        then
             -- these aren't necessarily anything to do with plucker
             -- coords but it gives a convenient 6 element vector
-            let m1@(Plucker m10 m11 m12 m13 m14 m15) = calcM perspective bx by br ballk  cth1
-                m2@(Plucker m20 m21 m22 m23 m24 m25) = calcM perspective bx by br ballkk cth2
-                k_z  = ballk.pos  ^. _z          -- C: p[k][2]
-                kk_z = ballkk.pos ^. _z          -- C: p[kk][2]
-                beta = exp (gslope*(0.5*(k_z + kk_z)-gz0)*gslope)
+            let Plucker m10 m11 m12 m13 m14 m15 = calcM perspective bx by br ballk  cth1
+                Plucker m20 m21 m22 m23 m24 m25 = calcM perspective bx by br ballkk cth2
+                -- TODO(gray-ramp): beta = exp (gslope*(0.5*(k_z+kk_z)-gz0)*gslope) per atom z's
             in if config.bline
                  then Picture [Polyline [V2 m14 m15, V2 m24 m25] "black"] -- straight thin line
                  else Picture [Polygon                                    -- thick tapered cap outline

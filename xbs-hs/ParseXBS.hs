@@ -45,31 +45,46 @@ pWord = pSpaces *> pMunch (not . isSpace)
 pText :: Parser Text
 pText = T.pack <$> pWord
 
--- a Fortran-friendly number: munch the numeric chars, fix a leading '.', read.
--- pMunch never fails, so this always yields a value (0 on garbage) — no need for
--- error-correction on numbers, and it accepts ".78" / "-.2349" which pDouble rejects.
-pNum :: Parser Double
-pNum = conv <$> (pSpaces *> pMunch (`elem` ("+-.eE0123456789" :: String)))
+numChars :: String
+numChars = "+-.eE0123456789"
+
+-- Fortran-friendly number read: fix a leading '.' then read (accepts ".78",
+-- "-.2349" which `read`/pDouble reject); 0 on garbage.
+readNum :: String -> Double
+readNum s = maybe 0 id (readMaybe (fixup s))
   where
-    conv s = maybe 0 id (readMaybe (fixup s))
     fixup ('-':'.':r) = "-0." ++ r
     fixup ('+':'.':r) = "0."  ++ r
     fixup ('.':r)     = "0."  ++ r
-    fixup s           = s
+    fixup t           = t
+
+-- a single number (munch the numeric chars). NB: pMunch can match EMPTY (→ 0),
+-- so pNum may succeed consuming nothing — fine in sequence, but NEVER under
+-- `pMany` (that loops: <<loop>>). For lists of numbers use pRestNums.
+pNum :: Parser Double
+pNum = readNum <$> (pSpaces *> pMunch (`elem` numChars))
+
+-- all remaining whitespace-separated numbers on the line (e.g. tmat's 9 floats),
+-- via munch-the-rest + words — avoids `pMany pNum`'s empty-loop.
+pRestNums :: Parser [Double]
+pRestNums = map readNum . words <$> pMunch (const True)
 
 -- one line → a BsLine (keyword-dispatched; falls back to LIgnore)
+-- NB: <<|> (greedy, left-biased) not <|>: the LIgnore catch-all succeeds on
+-- every line at zero cost, so with symmetric <|> it can swallow real lines.
+-- <<|> commits to the first branch that makes progress.
 pLine :: Parser BsLine
 pLine = pSpaces *>
    (    LAtom   <$  pSymbol "atom"  <*> pText <*> pNum <*> pNum <*> pNum
-    <|> LSpec   <$  pSymbol "spec"  <*> pText <*> pNum <*> pNum
-    <|> LBonds  <$  pSymbol "bonds" <*> pText <*> pText <*> pNum <*> pNum <*> pNum <*> pNum
-    <|> LTmat   <$  pSymbol "tmat"  <*> pMany pNum
-    <|> LScalar <$> pScalarKw <*> pNum
-    <|> LIgnore <$  pMunch (const True)
+   <<|> LSpec   <$  pSymbol "spec"  <*> pText <*> pNum <*> pNum
+   <<|> LBonds  <$  pSymbol "bonds" <*> pText <*> pText <*> pNum <*> pNum <*> pNum <*> pNum
+   <<|> LTmat   <$  pSymbol "tmat"  <*> pRestNums
+   <<|> LScalar <$> pScalarKw <*> pNum
+   <<|> LIgnore <$  pMunch (const True)
    )
   where
-    pScalarKw = T.pack <$> ( pSymbol "scale" <|> pSymbol "dist" <|> pSymbol "inc"
-                         <|> pSymbol "rfac"  <|> pSymbol "bfac" )
+    pScalarKw = T.pack <$> ( pSymbol "scale" <<|> pSymbol "dist" <<|> pSymbol "inc"
+                        <<|> pSymbol "rfac"  <<|> pSymbol "bfac" )
 
 execParser :: Parser a -> String -> a
 execParser p inp = fst (parse ((,) <$> p <*> pEnd) (createStr (LineColPos 0 0 0) inp))

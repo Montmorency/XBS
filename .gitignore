@@ -1,0 +1,27 @@
+*.hi
+*.o
+node_modules
+build.js
+*.dyn_hi
+*.dyn_o
+.DS_Store
+dist
+build
+*.dump-simpl
+haddock-build
+ProjectGenerator/result
+dist-newstyle
+.vscode
+
+# Devenv
+.devenv*
+devenv.local.nix
+.direnv
+
+# nix build output links
+result*
+
+.idea
+
+# Test folders
+static/Test.FileStorage.ControllerFunctionsSpec.claude/
