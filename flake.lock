@@ -1935,7 +1935,7 @@
     "oleg-delimcc": {
       "flake": false,
       "locked": {
-        "narHash": "sha256-gBSl809MgbHEk10M6y4sEv1q4uBtqrO6bxYYTrpn4ts=",
+        "narHash": "sha256-YLW2MqUNp2NRkPfd7cZ30AFTKwIqMWydd1OXIgRCdXM=",
         "path": "/Users/lambert/projects/CCRef",
         "type": "path"
       },
