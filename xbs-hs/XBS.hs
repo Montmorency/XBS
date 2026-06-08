@@ -52,7 +52,8 @@ data Config = Config { bline :: Bool
                      , tmat :: Mat3
                      }
 
-data Ball = Ball { pos :: Vec3
+data Ball = Ball { idx :: Int          -- stable atom index (load order); identifies the atom for selection/focus
+                 , pos :: Vec3
                  , rad :: Radius
                  , gray :: Color
                  , rgb :: RGB
@@ -97,9 +98,9 @@ data Bond = Bond { sp1       :: SpeciesName
 -- Backend-neutral drawing IR. The geometry fold produces a Picture (a free
 -- monoid of primitives); each backend has its own interpreter (renderSvg via
 -- d3x, renderCanvas via blank-canvas, ...). Nothing SVG/canvas-specific here.
-data Prim = Disc     Double Double Double Text  -- ^ cx cy r  fill   (atom)
-          | Polyline [V2 Double] Text           -- ^ pts      stroke (thin bond)
-          | Polygon  [V2 Double] Text           -- ^ pts      fill   (thick bond)
+data Prim = Disc     Int Double Double Double Text  -- ^ atomIdx cx cy r fill (atom; idx for selection)
+          | Polyline [V2 Double] Text               -- ^ pts      stroke (thin bond)
+          | Polygon  [V2 Double] Text               -- ^ pts      fill   (thick bond)
           deriving (Eq, Show)
 
 newtype Picture = Picture [Prim]
@@ -297,7 +298,7 @@ plotAtom :: Bool -> Perspective -> Ball -> Picture
 plotAtom wire persp ball =
   let V3 px py pr = atomPos persp ball.pos ball.rad   -- paper x,y + projected radius
       fill = if wire then "none" else rgbToCss ball.rgb
-  in Picture [Disc (px + taux) (py + tauy) pr fill]
+  in Picture [Disc ball.idx (px + taux) (py + tauy) pr fill]
 
 -- A 2D viewport transform: maps x, y and a length/radius (each Double->Double).
 -- Local for now; may promote to a d3x multi-dimensional scale type later, driven
@@ -334,26 +335,52 @@ pictureExtent (Picture prims) = case concatMap coords prims of
                , Domain (minimum (map vy ps), maximum (map vy ps)) )
   where
     vx (V2 x _) = x ; vy (V2 _ y) = y
-    coords (Disc cx cy r _) = [V2 (cx-r) (cy-r), V2 (cx+r) (cy+r)]  -- include the disc, not just its centre
+    coords (Disc _ cx cy r _) = [V2 (cx-r) (cy-r), V2 (cx+r) (cy+r)]  -- include the disc, not just its centre
     coords (Polyline p _)   = p
     coords (Polygon  p _)   = p
 
 -- | SVG interpreter (d3x/hsx). Other backends (blank-canvas, eps, …) are just
 --   more interpreters over the same Picture.
-renderSvg :: Picture -> Html
-renderSvg = renderSvgZoom 1.0
-
--- | As 'renderSvg' but with an interactive zoom multiplier (the live viewer).
-renderSvgZoom :: Double -> Picture -> Html
-renderSvgZoom zoom pic@(Picture prims) = foldMap prim prims
+-- | Shared SVG interpreter: fits the Picture to the viewport (with @zoom@) and
+--   renders bonds; how each atom disc is drawn is left to the @disc@ callback
+--   (idx + already-scaled cx cy r + fill), so the static and live paths differ
+--   only in the circle markup. Bonds are identical across paths.
+renderWith :: (Int -> Double -> Double -> Double -> Text -> Html)
+           -> Double -> Picture -> Html
+renderWith disc zoom pic@(Picture prims) = foldMap prim prims
   where
     (sx, sy, sr) = case pictureExtent pic of
                      Just (dx, dy) -> viewportScale zoom dx dy
                      Nothing       -> (id, id, id)
     pt (V2 x y) = V2 (sx x) (sy y)
-    prim (Disc cx cy r fill)   = [hsx|<circle cx={tshow (sx cx)} cy={tshow (sy cy)} r={tshow (sr r)} fill={fill} stroke="black"/>|]
+    prim (Disc i cx cy r fill) = disc i (sx cx) (sy cy) (sr r) fill
     prim (Polyline pts stroke) = [hsx|<path d={d3Line (map pt pts)} fill="none" stroke={stroke}/>|]
     prim (Polygon  pts fill)   = [hsx|<path d={d3Line (map pt pts) <> "Z"} fill={fill} stroke="black"/>|]
+
+-- | Static interpreter (xbs-render): plain circles, no interaction markup.
+renderSvg :: Picture -> Html
+renderSvg = renderWith staticDisc 1.0
+  where
+    staticDisc _ cx cy r fill =
+      [hsx|<circle cx={tshow cx} cy={tshow cy} r={tshow r} fill={fill} stroke="black"/>|]
+
+-- | Live interpreter (xbs-live): each atom is a clickable htmx target
+--   (@GET /focus?atom=i@, shift-click via @hx-vals@), and atoms in the @focus@
+--   stack are highlighted. @zoom@ is the interactive zoom multiplier.
+renderSvgLive :: [Int] -> Double -> Picture -> Html
+renderSvgLive focus = renderWith liveDisc
+  where
+    liveDisc i cx cy r fill =
+      let foc    = i `elem` focus
+          stroke = if foc then "#d00000" else "black"     :: Text
+          sw     = if foc then "3"       else "1"         :: Text
+      in [hsx|<circle
+                hx-get={"/focus?atom=" <> tshow i}
+                hx-vals="js:{multi: event.shiftKey ? 1 : 0}"
+                hx-target="#data" hx-swap="innerHTML"
+                style="cursor:pointer"
+                cx={tshow cx} cy={tshow cy} r={tshow r}
+                fill={fill} stroke={stroke} stroke-width={sw}/>|]
 
 
 ------------------------------------------------------------------------
@@ -413,9 +440,37 @@ applyCmd home nframes cmd cfg = case cmd of
            | otherwise    = (cfg.frame + d) `mod` nframes
 
 -- | Render the scene for the current Config to a standalone SVG document
---   (one render per interactive frame). Bonds are precomputed once and passed in.
-renderConfigSvg :: Config -> V.Vector (Ball, [Stick]) -> Text
-renderConfigSvg cfg ballsAndSticks =
+--   (one render per interactive frame). @focus@ is the current selection stack
+--   (atoms drawn highlighted + made clickable). Bonds are precomputed and passed in.
+renderConfigSvg :: [Int] -> Config -> V.Vector (Ball, [Stick]) -> Text
+renderConfigSvg focus cfg ballsAndSticks =
   renderMarkupText
     (svgViewBox (round width) (round height)
-                (renderSvgZoom cfg.zoom (drawScene cfg cfg.tmat ballsAndSticks)))
+                (renderSvgLive focus cfg.zoom (drawScene cfg cfg.tmat ballsAndSticks)))
+
+-- | The data pane (htmx swap target @#data@): one card per focused atom, newest
+--   first. v1 shows index + species + current-frame coords; LDOS / bonding /
+--   forces are stubbed pending the data source (duckdb / H-params, see CLAUDE.md).
+--   Returns an HTML fragment as Text (what the @/focus@ handler responds with).
+focusPanel :: V.Vector Ball -> [Int] -> Text
+focusPanel balls focus = renderMarkupText [hsx|
+  <div>
+    <div style="font:600 13px sans-serif;margin-bottom:8px">focus stack ({tshow (length focus)})</div>
+    {body}
+  </div>|]
+  where
+    body :: Html
+    body | null focus = [hsx|<div style="color:#888;font:12px sans-serif">click an atom · shift-click to add</div>|]
+         | otherwise  = foldMap atomCard focus
+    byIdx i = V.find (\b -> b.idx == i) balls
+    atomCard i = case byIdx i of
+      Nothing -> mempty
+      Just b  ->
+        let V3 x y z = b.pos
+            num v = tshow (fromIntegral (round (v * 1000) :: Int) / 1000 :: Double)
+        in [hsx|
+          <div style="border:1px solid #ddd;border-radius:6px;padding:6px 8px;margin-bottom:6px;font:12px ui-monospace,monospace">
+            <div style="font-weight:600">#{tshow i} · {b.species}</div>
+            <div style="color:#555">x {num x}  y {num y}  z {num z}</div>
+            <div style="color:#aaa;font-size:11px;margin-top:3px">LDOS / bonding / forces — pending</div>
+          </div>|]

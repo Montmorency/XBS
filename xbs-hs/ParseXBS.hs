@@ -106,10 +106,12 @@ loadBs src = (config, balls, bondMap)
     -- species → (radius, colour values: 1 gray or 3 rgb)
     specs = M.fromList [ (sp, (r, cvals)) | LSpec sp r cvals <- ls ]
 
-    balls = [ mkBall sp x y z | LAtom sp x y z <- ls ]
-    mkBall sp x y z =
+    -- atoms keep their load-order index (idx) so the live viewer can identify
+    -- them for selection/focus; movie frames reuse the same indices.
+    balls = zipWith mkBall [0..] [ (sp, x, y, z) | LAtom sp x y z <- ls ]
+    mkBall i (sp, x, y, z) =
       let (r, cvals) = M.findWithDefault (1.0, [0.5]) sp specs
-      in Ball { pos = V3 x y z, rad = r
+      in Ball { idx = i, pos = V3 x y z, rad = r
               , gray = realToFrac (atDef cvals 0 0.5), rgb = toRGB cvals
               , col = 0, special = 0, species = sp }
 
