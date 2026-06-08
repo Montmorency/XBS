@@ -9,6 +9,7 @@
 --   prompt, the rest-of-the-render-loop is the captured continuation, and we
 --   resume with the key. Config is the loop accumulator (no shared Config TVar);
 --   the only shared cell is the latest-SVG TVar the SSE handler streams from.
+
 module Main (main) where
 
 import XBS
@@ -27,7 +28,7 @@ import           Control.Exception       (finally)
 import           Control.Monad.IO.Class  (liftIO)
 import           System.Environment      (getArgs)
 
-import           Control.Monad.CC        -- delimited continuations
+import           Control.Monad.CC.CCRef  -- multi-prompt delimited control (Oleg's reference impl)
 
 import           Network.Wai
 import           Network.Wai.Handler.Warp (run)
@@ -48,39 +49,49 @@ main = do
 
 runLive :: FilePath -> IO ()
 runLive path = do
+
+  -- | Switch readFile to open a streaming connection
   src <- readFile path
+  
   let (cfg0, balls, bondMap) = loadBs src
       bs    = V.fromList (stick bondMap balls)   -- topology built once
       home  = cfg0.tmat                          -- for the reset key
+      
   tv <- newTVarIO ("" :: Text)                   -- latest rendered SVG (the one shared cell)
+  
   _  <- forkIO (run port (sseApp tv))
-  putStrLn $ "xbs-live -> http://localhost:" <> show port
-          <> "   (arrows ' / rotate, < > spin, p persp, l line, w wire, r reset, q quit)"
+  
   vty <- VC.mkVty Vty.defaultConfig
-  Vty.update vty $ Vty.picForImage $ Vty.string Vty.defAttr
-      "xbs-live  |  open the browser  |  arrows/' / rotate, < > spin, p l w r, q quit"
+  
+  Vty.update vty $ Vty.picForImage $ Vty.string Vty.defAttr (xbsDocString port)
+      
   driver tv vty home bs cfg0 `finally` Vty.shutdown vty
 
--- | Delimited-continuation driver: render → publish → suspend for a key → apply.
+
+
+xbsDocString port = "xbs-live -> http://localhost:" <> show port <> "   (arrows, ', / : rotate, < > spin, p persp, l line, w wire, r reset, q quit)"
+
+
+-- | Delimited-continuation driver: render → publish → suspend for a key → apply:
 driver :: TVar Text -> Vty.Vty -> Mat3 -> V.Vector (Ball, [Stick]) -> Config -> IO ()
-driver tv vty home bs cfg0 = runCCT $ do
+driver tv vty home bs cfg0 = runCC $ do
     p <- newPrompt
     let go cfg = do
           liftIO $ atomically $ writeTVar tv (renderConfigSvg cfg bs)
           ev <- listenForChar p vty
           case evToCmd ev of
-            Quit -> return ()
+            Quit -> pure ()
             cmd  -> go (applyCmd home cmd cfg)
     pushPrompt p (go cfg0)
 
 -- | The suspension point: capture the render-loop continuation at @p@, read a
 --   key, resume. Phase 1 resumes immediately; the captured continuation is the
 --   seam for future focus -> calc/DB interleaving.
-listenForChar :: Prompt ans () -> Vty.Vty -> CCT ans IO Vty.Event
-listenForChar p vty = withSubCont p $ \sk ->
+listenForChar :: Prompt IO () -> Vty.Vty -> CC IO Vty.Event
+listenForChar p vty = takeSubCont p $ \sk ->
     pushPrompt p $ do
         ev <- liftIO (Vty.nextEvent vty)
-        pushSubCont sk (return ev)
+        pushSubCont sk (pure ev)
 
 evToCmd :: Vty.Event -> Cmd
 evToCmd (Vty.EvKey k _) = case k of
