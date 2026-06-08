@@ -96,6 +96,8 @@ executable xbs-live
         , text
         , bytestring
         , vector
+        , filepath
+        , directory
 
 -- Parser tests (hspec), grown modularly as ParseXBS gains formats.
 --   cabal test            (inside nix develop)

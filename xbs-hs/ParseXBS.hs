@@ -11,6 +11,7 @@ module ParseXBS
   ( BsLine(..)
   , parseBs
   , loadBs
+  , parseMv
   ) where
 
 import XBS
@@ -127,6 +128,22 @@ loadBs src = (config, balls, bondMap)
     bline0    = atDef switches0 3 0 == 1            -- idx 3 bline: 1 = lines, 0 = cylinders
     persp0    = atDef switches0 7 0 == 2            -- idx 7 pmode: 2 = true perspective
     config    = defConfig { tmat = tmat0, bline = bline0, perspective = persp0 }
+
+-- | Parse a @.mv@ movie file into frames of atom positions. Each @frame …@
+--   header line starts a new frame; the whitespace-separated floats that follow
+--   (until the next header) are the atoms' x y z in the SAME order as the .bs
+--   atoms. @natoms@ fixes the chunk size (trailing junk is dropped); frame 0 of
+--   a movie equals the .bs coordinates. Lines before the first header are skipped.
+parseMv :: Int -> String -> [[Vec3]]
+parseMv natoms = map frameVecs . frames . lines
+  where
+    isHdr l = case words l of ("frame":_) -> True; _ -> False
+    frames []                  = []
+    frames (l:ls) | isHdr l    = let (body, rest) = break isHdr ls in body : frames rest
+                  | otherwise  = frames ls          -- skip preamble before frame 1
+    frameVecs body = take natoms (toV3s (map readNum (concatMap words body)))
+    toV3s (x:y:z:r) = V3 x y z : toV3s r
+    toV3s _         = []
 
 -- safe list index with default
 atDef :: [a] -> Int -> a -> a

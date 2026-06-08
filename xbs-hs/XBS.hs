@@ -43,9 +43,12 @@ type Vec3 = V3 Double          -- a 3-vector of coordinates
 type Mat3 = M33 Double         -- = V3 (V3 Double), a 3x3 transform matrix
 
 data Config = Config { bline :: Bool
+                     , wire :: Bool                 -- wireframe: atoms hollow (fill none), bonds only
                      , perspective :: Perspective   -- render mode (C pmode); toggled live
                      , dist0 :: Float
                      , scale :: Float
+                     , zoom :: Double               -- interactive zoom multiplier (1 = fit-to-view)
+                     , frame :: Int                 -- movie frame index (0 when static / no .mv)
                      , tmat :: Mat3
                      }
 
@@ -103,9 +106,12 @@ newtype Picture = Picture [Prim]
   deriving (Eq, Show, Semigroup, Monoid)
 
 defConfig = Config { bline = False   -- C default (pmode): thick cylinders, not lines
+                   , wire = False
                    , perspective = False
                    , dist0 = 250
                    , scale = 15
+                   , zoom = 1.0
+                   , frame = 0
                    }
 -- XBS constants: these should get plugged into config for interaction (versor drag or terminal connection)
 -- kitty render?
@@ -185,7 +191,7 @@ drawBallAndSticks :: Config -> Mat3 -> (Ball, [Stick]) -> Picture
 drawBallAndSticks config tmat (ball, sticks) =
     -- bonds first, then the atom on top: the atom covers its own near-caps,
     -- while the bond shafts (outside the atom radius) stay visible.
-    foldMap drawOneBond sortedSticks <> plotAtom config.perspective (rot ball)
+    foldMap drawOneBond sortedSticks <> plotAtom config.wire config.perspective (rot ball)
   where
     rot b        = b { pos = tmat !* b.pos }              -- ball into view space
     rotStick stk = stk { end = rot stk.end }              -- only .end is used downstream
@@ -285,10 +291,13 @@ drawScene :: Config -> Mat3 -> V.Vector (Ball, [Stick]) -> Picture
 drawScene config tmat = foldMap (drawBallAndSticks config tmat) . sortByZ tmat
 
 -- | One atom as a Disc primitive (ball is expected already in view space).
-plotAtom :: Perspective -> Ball -> Picture
-plotAtom persp ball =
+--   In wireframe mode the disc is hollow (fill "none") so only its outline and
+--   the bonds show — mirrors the JS `wire_fill` (atom fill = none when wire).
+plotAtom :: Bool -> Perspective -> Ball -> Picture
+plotAtom wire persp ball =
   let V3 px py pr = atomPos persp ball.pos ball.rad   -- paper x,y + projected radius
-  in Picture [Disc (px + taux) (py + tauy) pr (rgbToCss ball.rgb)]
+      fill = if wire then "none" else rgbToCss ball.rgb
+  in Picture [Disc (px + taux) (py + tauy) pr fill]
 
 -- A 2D viewport transform: maps x, y and a length/radius (each Double->Double).
 -- Local for now; may promote to a d3x multi-dimensional scale type later, driven
@@ -300,9 +309,11 @@ type Transform2D = (Double -> Double, Double -> Double, Double -> Double)
 --   cf. C hardcopy: balls+sticks share one space, radius used directly). The
 --   data extent (x,y Domains) is fitted inside the margins, centred, y flipped
 --   (SVG y points down). Returns (mapX, mapY, mapR).
---   TODO: fold pan (taux/tauy) + interactive zoom in here.
-viewportScale :: Domain Double -> Domain Double -> Transform2D
-viewportScale (Domain (mnx, mxx)) (Domain (mny, mxy)) =
+--   @zoom@ multiplies the fit-to-view factor about the data centre (zoom 1 =
+--   fits the margins; >1 magnifies, may overflow the viewBox — that's intended).
+--   TODO: fold pan (taux/tauy) in here too.
+viewportScale :: Double -> Domain Double -> Domain Double -> Transform2D
+viewportScale zoom (Domain (mnx, mxx)) (Domain (mny, mxy)) =
     ( \x -> width  / 2 + s (x - cx0)
     , \y -> height / 2 - s (y - cy0)        -- flip y
     , s )
@@ -310,8 +321,8 @@ viewportScale (Domain (mnx, mxx)) (Domain (mny, mxy)) =
     maxSpan = max 1e-9 (max (mxx - mnx) (mxy - mny))
     avail   = min (width - left_margin - right_margin)
                   (height - top_margin - bottom_margin)
-    -- one factor via d3x: map a delta in [0,maxSpan] → [0,avail]
-    s d     = coordVal (linearScale (Domain (0, maxSpan)) (Range (Length 0, Length avail)) d)
+    -- one factor via d3x: map a delta in [0,maxSpan] → [0,avail], then zoom
+    s d     = zoom * coordVal (linearScale (Domain (0, maxSpan)) (Range (Length 0, Length avail)) d)
     cx0     = 0.5 * (mnx + mxx)
     cy0     = 0.5 * (mny + mxy)
 
@@ -330,10 +341,14 @@ pictureExtent (Picture prims) = case concatMap coords prims of
 -- | SVG interpreter (d3x/hsx). Other backends (blank-canvas, eps, …) are just
 --   more interpreters over the same Picture.
 renderSvg :: Picture -> Html
-renderSvg pic@(Picture prims) = foldMap prim prims
+renderSvg = renderSvgZoom 1.0
+
+-- | As 'renderSvg' but with an interactive zoom multiplier (the live viewer).
+renderSvgZoom :: Double -> Picture -> Html
+renderSvgZoom zoom pic@(Picture prims) = foldMap prim prims
   where
     (sx, sy, sr) = case pictureExtent pic of
-                     Just (dx, dy) -> viewportScale dx dy
+                     Just (dx, dy) -> viewportScale zoom dx dy
                      Nothing       -> (id, id, id)
     pt (V2 x y) = V2 (sx x) (sy y)
     prim (Disc cx cy r fill)   = [hsx|<circle cx={tshow (sx cx)} cy={tshow (sy cy)} r={tshow (sr r)} fill={fill} stroke="black"/>|]
@@ -360,15 +375,21 @@ rotmat ixyz alfa t = case ixyz of
 -- | A view/render command from the interactive driver.
 data Cmd = RotL | RotR | RotU | RotD | RotCCW | RotCW   -- arrows / ' / / / < / >
          | TogglePersp | ToggleLine | ToggleWire         -- p / l / w
+         | ZoomIn | ZoomOut                               -- + (=) / -
          | ResetView                                      -- r
-         | FramePrev | FrameNext | FrameFirst | FrameLast -- [ ] j k  (stubs for now)
+         | FramePrev | FrameNext | FrameFirst | FrameLast -- [ ] j k
          | Quit | NoOp
   deriving (Eq, Show)
 
--- | Apply a command to the Config. @home@ is the original view (for ResetView).
---   Frame commands are stubs until animation is wired (see drawScene/positions).
-applyCmd :: Mat3 -> Cmd -> Config -> Config
-applyCmd home cmd cfg = case cmd of
+-- | Per-keypress zoom factor (multiplicative).
+zoomStep :: Double
+zoomStep = 1.1
+
+-- | Apply a command to the Config. @home@ is the original view (for ResetView);
+--   @nframes@ is the movie length (1 when static) so frame steps wrap modularly,
+--   matching the JS @advance_frame@ (index + n `mod` nframes).
+applyCmd :: Mat3 -> Int -> Cmd -> Config -> Config
+applyCmd home nframes cmd cfg = case cmd of
     RotL        -> rot 1 (-dalfa)
     RotR        -> rot 1   dalfa
     RotU        -> rot 2 (-dalfa)
@@ -377,10 +398,19 @@ applyCmd home cmd cfg = case cmd of
     RotCW       -> rot 3 (-dalfa)
     TogglePersp -> cfg { perspective = not cfg.perspective }
     ToggleLine  -> cfg { bline = not cfg.bline }
-    ToggleWire  -> cfg                                  -- wire mode: TODO
-    ResetView   -> cfg { tmat = home }
-    _           -> cfg                                  -- frames (stub), Quit/NoOp: driver handles
-  where rot ax a = cfg { tmat = rotmat ax a cfg.tmat }
+    ToggleWire  -> cfg { wire  = not cfg.wire }
+    ZoomIn      -> cfg { zoom = cfg.zoom * zoomStep }
+    ZoomOut     -> cfg { zoom = cfg.zoom / zoomStep }
+    ResetView   -> cfg { tmat = home, zoom = 1.0 }
+    FrameNext   -> cfg { frame = step   1 }
+    FramePrev   -> cfg { frame = step (-1) }
+    FrameFirst  -> cfg { frame = 0 }
+    FrameLast   -> cfg { frame = max 0 (nframes - 1) }
+    _           -> cfg                                  -- Quit/NoOp: driver handles
+  where
+    rot ax a = cfg { tmat = rotmat ax a cfg.tmat }
+    step d | nframes <= 1 = cfg.frame
+           | otherwise    = (cfg.frame + d) `mod` nframes
 
 -- | Render the scene for the current Config to a standalone SVG document
 --   (one render per interactive frame). Bonds are precomputed once and passed in.
@@ -388,4 +418,4 @@ renderConfigSvg :: Config -> V.Vector (Ball, [Stick]) -> Text
 renderConfigSvg cfg ballsAndSticks =
   renderMarkupText
     (svgViewBox (round width) (round height)
-                (renderSvg (drawScene cfg cfg.tmat ballsAndSticks)))
+                (renderSvgZoom cfg.zoom (drawScene cfg cfg.tmat ballsAndSticks)))
