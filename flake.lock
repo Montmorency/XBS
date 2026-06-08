@@ -138,15 +138,15 @@
         "type": "github"
       }
     },
-    "cc-delcont": {
+    "cc-delcont-ref": {
       "flake": false,
       "locked": {
-        "narHash": "sha256-jq03WgEmWwnzPuNbLYogNOjC3/xkC32PiWSAb3cqL+s=",
-        "path": "/Users/lambert/projects/CC-delcont",
+        "narHash": "sha256-NJtM5mGM49gPIGIi5PaN1xrLkW6QyjF6Rm/16CfhTVM=",
+        "path": "/Users/lambert/projects/CCRef",
         "type": "path"
       },
       "original": {
-        "path": "/Users/lambert/projects/CC-delcont",
+        "path": "/Users/lambert/projects/CCRef",
         "type": "path"
       }
     },
@@ -2150,7 +2150,7 @@
     },
     "root": {
       "inputs": {
-        "cc-delcont": "cc-delcont",
+        "cc-delcont-ref": "cc-delcont-ref",
         "d3x": "d3x",
         "ihp": "ihp",
         "nixpkgs": [
