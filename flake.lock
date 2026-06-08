@@ -138,18 +138,6 @@
         "type": "github"
       }
     },
-    "cc-delcont-ref": {
-      "flake": false,
-      "locked": {
-        "narHash": "sha256-NJtM5mGM49gPIGIi5PaN1xrLkW6QyjF6Rm/16CfhTVM=",
-        "path": "/Users/lambert/projects/CCRef",
-        "type": "path"
-      },
-      "original": {
-        "path": "/Users/lambert/projects/CCRef",
-        "type": "path"
-      }
-    },
     "crate2nix": {
       "inputs": {
         "cachix": "cachix_2",
@@ -1944,6 +1932,18 @@
         "type": "github"
       }
     },
+    "oleg-delimcc": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-gBSl809MgbHEk10M6y4sEv1q4uBtqrO6bxYYTrpn4ts=",
+        "path": "/Users/lambert/projects/CCRef",
+        "type": "path"
+      },
+      "original": {
+        "path": "/Users/lambert/projects/CCRef",
+        "type": "path"
+      }
+    },
     "poetry2nix": {
       "inputs": {
         "flake-utils": "flake-utils",
@@ -2150,13 +2150,13 @@
     },
     "root": {
       "inputs": {
-        "cc-delcont-ref": "cc-delcont-ref",
         "d3x": "d3x",
         "ihp": "ihp",
         "nixpkgs": [
           "ihp",
           "nixpkgs"
-        ]
+        ],
+        "oleg-delimcc": "oleg-delimcc"
       }
     },
     "rust-overlay": {

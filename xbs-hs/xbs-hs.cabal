@@ -73,7 +73,7 @@ executable xbs-render
 
 -- xbs-live: interactive viewer. Serves the rendered SVG over SSE on :9090 and
 --   drives the view (rotate/perspective/line/reset) from the terminal via vty,
---   with a delimited-continuation (CC-delcont-ref) input loop. Config is the loop
+--   with a delimited-continuation (oleg-delimcc) input loop. Config is the loop
 --   accumulator; the only shared cell is the latest-SVG TVar the SSE handler reads.
 --   cabal run xbs-live -- ../examples/ring.bs   (inside nix develop)
 executable xbs-live
@@ -86,7 +86,7 @@ executable xbs-live
     build-depends:
           base >= 4.17.0 && < 4.22
         , xbs-hs
-        , CC-delcont-ref
+        , oleg-delimcc
         , vty
         , vty-crossplatform
         , warp

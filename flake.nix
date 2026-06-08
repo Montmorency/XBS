@@ -15,18 +15,19 @@
             url = "path:/Users/lambert/projects/ihp-projects/d3x";
             flake = false;
         };
-    # CC-delcont-ref (multi-prompt delimited control via reference cells —
+    # oleg-delimcc (multi-prompt delimited control via reference cells —
     # Oleg's reference impl of Dybvig/Peyton Jones/Sabry, mirroring delimcc's
-    # OCaml interface) for xbs-live's input loop. Built from the local checkout;
-    # we ship this ourselves rather than depend on nixpkgs' broken CC-delcont.
-    cc-delcont-ref = {
+    # OCaml interface) for xbs-live's input loop. Built from the local checkout
+    # (repo: Montmorency/CCRef); we ship this ourselves rather than depend on
+    # nixpkgs' broken CC-delcont.
+    oleg-delimcc = {
         url = "path:/Users/lambert/projects/CCRef";
         flake = false;
     };
   };
 
   outputs =
-    { self, nixpkgs, ihp, d3x, cc-delcont-ref }:
+    { self, nixpkgs, ihp, d3x, oleg-delimcc }:
     let
       allSystems = [
         "x86_64-linux"
@@ -70,9 +71,9 @@
               # as 1.6.0 — satisfying d3x's `ihp-hsx >= 1.6` bound.
               ihp-hsx = hfinal.callPackage "${ihp}/ihp-hsx/default.nix" { };
               d3x = hfinal.callPackage "${d3x}/default.nix" { };
-              # local CC-delcont-ref (Oleg's reference impl); we ship it
+              # local oleg-delimcc (Oleg's reference impl); we ship it
               # ourselves rather than use nixpkgs' broken CC-delcont
-              CC-delcont-ref = hfinal.callPackage "${cc-delcont-ref}/default.nix" { };
+              oleg-delimcc = hfinal.callPackage "${oleg-delimcc}/default.nix" { };
               xbs-hs = hfinal.callPackage ./xbs-hs/default.nix { };
             }
           );
@@ -101,6 +102,11 @@
 
           # --- xbs-hs: Haskell port over d3x ------------------------------
           xbs-hs = pkgs.haskellPackages.xbs-hs;
+
+          # --- oleg-delimcc: our shipped delimited-continuations package ---
+          # Building it runs the test-suite (doCheck=true): Oleg's standard
+          # CCRef battery + CCExc/CCCxe alignment checks.
+          oleg-delimcc = pkgs.haskellPackages.oleg-delimcc;
 
           # --- xbs-js: browser spec, bundled with Deno --------------------
           # For now xbs.js is an Observable-flavored spec; the bundle step is a
