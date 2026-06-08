@@ -43,10 +43,12 @@ main = hspec $ do
       parseBs "atom C 0.0 1.5 -2.0" `shouldBe` [LAtom "C" 0.0 1.5 (-2.0)]
     it "accepts Fortran-style numbers (.78, -.5)" $
       parseBs "atom O .78 -.5 1.0" `shouldBe` [LAtom "O" 0.78 (-0.5) 1.0]
-    it "parses a spec line (radius + gray)" $
-      parseBs "spec C 1.0 0.7" `shouldBe` [LSpec "C" 1.0 0.7]
+    it "parses a spec line (radius + single gray)" $
+      parseBs "spec C 1.0 0.7" `shouldBe` [LSpec "C" 1.0 [0.7]]
+    it "parses a spec line with 3-value RGB colour" $
+      parseBs "spec C 0.288 0.89 0.89 0.89" `shouldBe` [LSpec "C" 0.288 [0.89, 0.89, 0.89]]
     it "parses a bonds line" $
-      parseBs "bonds C H 0.0 3.4 0.109 1.0" `shouldBe` [LBonds "C" "H" 0.0 3.4 0.109 1.0]
+      parseBs "bonds C H 0.0 3.4 0.109 1.0" `shouldBe` [LBonds "C" "H" 0.0 3.4 0.109 [1.0]]
     it "parses a tmat line (9 floats)" $
       parseBs "tmat 1 0 0 0 1 0 0 0 1" `shouldBe` [LTmat [1,0,0, 0,1,0, 0,0,1]]
     it "ignores comments / unknown directives" $
@@ -80,6 +82,9 @@ main = hspec $ do
 
     it "stores bond rules symmetrically (H–C too)" $
       isJust (M.lookup ("H", "C") bondMap) `shouldBe` True
+
+    it "reads a single-gray spec colour as RGB g g g (C → 0.7)" $
+      (head [ b | b <- balls, b.species == "C" ]).rgb `shouldBe` RGB 0.7 0.7 0.7
 
   describe "loadBs — ring.bs (cage, 60 C + 2 O)" $ do
     -- reads the real example file; cabal test runs with cwd = xbs-hs/
@@ -126,14 +131,17 @@ main = hspec $ do
     it "joins atoms with the 3-value-RGB spec radius (0.288)" $
       (head balls).rad `shouldBe` 0.288
 
+    it "reads the 3-value RGB spec colour (C → RGB 0.89 0.89 0.89)" $
+      (head balls).rgb `shouldBe` RGB 0.89 0.89 0.89
+
     it "has in-plane C–C (max 0.75) and inter-sublattice C–C1 (max 1.37) bonds" $ do
       let Just cc  = M.lookup ("C", "C")  bondMap
           Just cc1 = M.lookup ("C", "C1") bondMap
       cc.maxLength  `shouldBe` 0.75
       cc1.maxLength `shouldBe` 1.37
 
-    it "reads switches → bline = False (cylinders)" $
-      config.bline `shouldBe` False
+    it "reads switches → bline = True (grpht switches idx 3 = 1, line bonds)" $
+      config.bline `shouldBe` True
 
 -- gray is stored as Float (realToFrac from the parsed Double), so compare ~approximately
 approx :: Float -> Float -> Bool

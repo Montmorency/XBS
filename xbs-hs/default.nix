@@ -1,8 +1,10 @@
 # Pre-generated to avoid IFD (Import From Derivation) — see the note in the
 # top-level flake.nix. Regenerate after changing xbs-hs.cabal with:
 #   nix run nixpkgs#cabal2nix -- ./xbs-hs > xbs-hs/default.nix
-{ mkDerivation, base, containers, d3x, filepath, hspec, ihp-hsx, lens
-, lib, linear, text, uu-parsinglib, vector, vector-algorithms
+{ mkDerivation, base, bytestring, CC-delcont, containers, d3x, filepath
+, hspec, http-types, ihp-hsx, lens, lib, linear, stm, text
+, uu-parsinglib, vector, vector-algorithms, vty, vty-crossplatform
+, wai, warp
 }:
 mkDerivation {
   pname = "xbs-hs";
@@ -15,7 +17,8 @@ mkDerivation {
     vector-algorithms
   ];
   executableHaskellDepends = [
-    base d3x filepath ihp-hsx text vector
+    base bytestring CC-delcont d3x filepath http-types ihp-hsx stm text
+    vector vty vty-crossplatform wai warp
   ];
   testHaskellDepends = [ base containers hspec linear text ];
   doCheck = false;   # tests read ../examples (not in the nix src); run via `cabal test`

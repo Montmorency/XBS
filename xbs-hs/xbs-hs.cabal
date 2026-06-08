@@ -71,6 +71,32 @@ executable xbs-render
         , text
         , filepath
 
+-- xbs-live: interactive viewer. Serves the rendered SVG over SSE on :9090 and
+--   drives the view (rotate/perspective/line/reset) from the terminal via vty,
+--   with a delimited-continuation (CC-delcont) input loop. Config is the loop
+--   accumulator; the only shared cell is the latest-SVG TVar the SSE handler reads.
+--   cabal run xbs-live -- ../examples/ring.bs   (inside nix develop)
+executable xbs-live
+    import: common-extensions, common-flags
+    default-language: GHC2021
+    hs-source-dirs: app/live
+    main-is: Main.hs
+    -- warp + the forked SSE server need the threaded RTS
+    ghc-options: -threaded -rtsopts
+    build-depends:
+          base >= 4.17.0 && < 4.22
+        , xbs-hs
+        , CC-delcont
+        , vty
+        , vty-crossplatform
+        , warp
+        , wai
+        , http-types
+        , stm
+        , text
+        , bytestring
+        , vector
+
 -- Parser tests (hspec), grown modularly as ParseXBS gains formats.
 --   cabal test            (inside nix develop)
 test-suite xbs-test

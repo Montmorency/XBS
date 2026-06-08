@@ -31,8 +31,8 @@ type Parser a = P (Str Char String LineColPos) a
 
 -- | One recognised directive line of a @.bs@ file.
 data BsLine = LAtom   Text Double Double Double                 -- ^ atom  sp x y z
-            | LSpec   Text Double Double                        -- ^ spec  sp radius gray
-            | LBonds  Text Text Double Double Double Double      -- ^ bonds s1 s2 min max radius gray
+            | LSpec   Text Double [Double]                      -- ^ spec  sp radius colour(1 gray | 3 rgb)
+            | LBonds  Text Text Double Double Double [Double]    -- ^ bonds s1 s2 min max radius colour(1|3)
             | LTmat   [Double]                                  -- ^ tmat  (9 floats)
             | LScalar Text Double                               -- ^ scale/dist/inc/rfac/bfac …
             | LSwitches [Int]                                   -- ^ switches: pixmap numbers gray BLINE wire bonds recenter PMODE shadow
@@ -77,8 +77,8 @@ pRestNums = map readNum . words <$> pMunch (const True)
 pLine :: Parser BsLine
 pLine = pSpaces *>
    (    LAtom   <$  pSymbol "atom"  <*> pText <*> pNum <*> pNum <*> pNum
-   <<|> LSpec   <$  pSymbol "spec"  <*> pText <*> pNum <*> pNum
-   <<|> LBonds  <$  pSymbol "bonds" <*> pText <*> pText <*> pNum <*> pNum <*> pNum <*> pNum
+   <<|> LSpec   <$  pSymbol "spec"  <*> pText <*> pNum <*> pRestNums
+   <<|> LBonds  <$  pSymbol "bonds" <*> pText <*> pText <*> pNum <*> pNum <*> pNum <*> pRestNums
    <<|> LTmat     <$  pSymbol "tmat"     <*> pRestNums
    <<|> LSwitches <$  pSymbol "switches" <*> (map round <$> pRestNums)
    <<|> LScalar   <$> pScalarKw <*> pNum
@@ -102,34 +102,41 @@ loadBs src = (config, balls, bondMap)
   where
     ls = parseBs src
 
-    -- species → (radius, gray)
-    specs = M.fromList [ (sp, (r, g)) | LSpec sp r g <- ls ]
+    -- species → (radius, colour values: 1 gray or 3 rgb)
+    specs = M.fromList [ (sp, (r, cvals)) | LSpec sp r cvals <- ls ]
 
     balls = [ mkBall sp x y z | LAtom sp x y z <- ls ]
     mkBall sp x y z =
-      let (r, g) = M.findWithDefault (1.0, 0.5) sp specs
+      let (r, cvals) = M.findWithDefault (1.0, [0.5]) sp specs
       in Ball { pos = V3 x y z, rad = r
-              , gray = realToFrac g, rgb = realToFrac g
+              , gray = realToFrac (atDef cvals 0 0.5), rgb = toRGB cvals
               , col = 0, special = 0, species = sp }
 
     -- bonds are symmetric → insert both species orderings
     bondMap = M.fromList $ concat
       [ [ ((s1, s2), bnd), ((s2, s1), bnd) ]
-      | LBonds s1 s2 mn mx r g <- ls
+      | LBonds s1 s2 mn mx r cvals <- ls
       , let bnd = Bond { sp1 = s1, sp2 = s2, minLength = mn, maxLength = mx
-                       , radius = r, gray = realToFrac g } ]
+                       , radius = r, rgb = toRGB cvals } ]
 
     tmat0 = case [ ds | LTmat ds <- ls ] of
               (ds : _) -> toMat3 ds
               _        -> init_tmat
     -- switches: …gray BLINE(idx 3) wire bonds recenter PMODE(idx 7) shadow
     switches0 = case [ ss | LSwitches ss <- ls ] of (ss : _) -> ss; _ -> []
-    bline0    = atDef switches0 3 0 == 1            -- bline: 1 = lines, 0 = cylinders
-    config    = defConfig { tmat = tmat0, bline = bline0 }
+    bline0    = atDef switches0 3 0 == 1            -- idx 3 bline: 1 = lines, 0 = cylinders
+    persp0    = atDef switches0 7 0 == 2            -- idx 7 pmode: 2 = true perspective
+    config    = defConfig { tmat = tmat0, bline = bline0, perspective = persp0 }
 
 -- safe list index with default
 atDef :: [a] -> Int -> a -> a
 atDef xs i d = case drop i xs of (x:_) -> x; _ -> d
+
+-- the .bs colour field → RGB (1 value = gray, 3 = rgb)
+toRGB :: [Double] -> RGB
+toRGB [g]       = RGB g g g
+toRGB (r:g:b:_) = RGB r g b
+toRGB _         = RGB 0.5 0.5 0.5
 
 toMat3 :: [Double] -> Mat3
 toMat3 [a,b,c, d,e,f, g,h,i] = V3 (V3 a b c) (V3 d e f) (V3 g h i)

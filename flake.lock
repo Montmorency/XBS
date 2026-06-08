@@ -138,6 +138,18 @@
         "type": "github"
       }
     },
+    "cc-delcont": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-jq03WgEmWwnzPuNbLYogNOjC3/xkC32PiWSAb3cqL+s=",
+        "path": "/Users/lambert/projects/CC-delcont",
+        "type": "path"
+      },
+      "original": {
+        "path": "/Users/lambert/projects/CC-delcont",
+        "type": "path"
+      }
+    },
     "crate2nix": {
       "inputs": {
         "cachix": "cachix_2",
@@ -2138,6 +2150,7 @@
     },
     "root": {
       "inputs": {
+        "cc-delcont": "cc-delcont",
         "d3x": "d3x",
         "ihp": "ihp",
         "nixpkgs": [

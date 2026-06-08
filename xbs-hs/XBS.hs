@@ -18,7 +18,7 @@ import D3X.Scales
 import D3X.Path (d3Line, PathStr)
 
 import IHP.HSX.MarkupQQ (hsx)
-import IHP.HSX.Markup (Html)
+import IHP.HSX.Markup (Html, renderMarkupText)
 
 import Linear hiding (perspective)  -- we define our own render-mode `perspective`
 import Linear.Quaternion (rotate)
@@ -43,6 +43,7 @@ type Vec3 = V3 Double          -- a 3-vector of coordinates
 type Mat3 = M33 Double         -- = V3 (V3 Double), a 3x3 transform matrix
 
 data Config = Config { bline :: Bool
+                     , perspective :: Perspective   -- render mode (C pmode); toggled live
                      , dist0 :: Float
                      , scale :: Float
                      , tmat :: Mat3
@@ -51,17 +52,18 @@ data Config = Config { bline :: Bool
 data Ball = Ball { pos :: Vec3
                  , rad :: Radius
                  , gray :: Color
-                 , rgb :: Color
+                 , rgb :: RGB
                  , col :: Int
                  , special :: Int
                  , species :: Text
                  }
-                          
+
 data Stick = Stick { start :: Ball
                    , end :: Ball
                    , rad :: Radius
                    , gray :: Float
                    , col :: Int
+                   , rgb :: RGB
                    }
 
 
@@ -70,14 +72,23 @@ type SpeciesName = Text
 type MinLength = Double   -- physics: compared against model-space bond lengths (Double)
 type MaxLength = Double   -- physics: ditto
 type Radius    = Double   -- physics-adjacent: feeds the projection geometry
-type Color     = Float    -- presentation: gray/colour value
+type Color     = Float    -- presentation: a single gray value 0..1
+
+-- | An RGB colour, each channel 0..1 (the .bs spec/bonds "colour" field; a
+--   single gray g is read as RGB g g g).
+data RGB = RGB !Double !Double !Double deriving (Eq, Show)
+
+-- | RGB → a CSS colour string for SVG fill/stroke.
+rgbToCss :: RGB -> Text
+rgbToCss (RGB r g b) = "rgb(" <> ch r <> "," <> ch g <> "," <> ch b <> ")"
+  where ch x = tshow (max 0 (min 255 (round (x * 255) :: Int)))
 
 data Bond = Bond { sp1       :: SpeciesName
                  , sp2       :: SpeciesName
                  , minLength :: MinLength
                  , maxLength :: MaxLength
                  , radius    :: Radius
-                 , gray      :: Color      -- the .bs "color" field is a gray 0..1 (feeds Stick.gray)
+                 , rgb       :: RGB        -- the .bs "color" field (1 gray or 3 RGB values)
                  }
 
 -- Backend-neutral drawing IR. The geometry fold produces a Picture (a free
@@ -92,6 +103,7 @@ newtype Picture = Picture [Prim]
   deriving (Eq, Show, Semigroup, Monoid)
 
 defConfig = Config { bline = False   -- C default (pmode): thick cylinders, not lines
+                   , perspective = False
                    , dist0 = 250
                    , scale = 15
                    }
@@ -115,11 +127,9 @@ top_margin = 20
 bottom_margin = 20
 dalfa = 0.08726646259971647
 bndfac = 1
--- render globals (C uses these as globals; Config mirrors them for later threading)
+-- render globals (C uses these as globals; scale is C `fac`)
 maxRad = 100                -- C MAXRAD: cap on projected radius
-scale = 15                  -- C `fac`: overall plot scale
-perspective :: Perspective  -- C pmode==1 "pseudo" perspective; False = projection branch
-perspective = False
+scale = 15                  -- C `fac`: overall plot scale (perspective now lives in Config)
 
 
 -- This is to accumulate the atomic ordering from bottom to top along
@@ -175,7 +185,7 @@ drawBallAndSticks :: Config -> Mat3 -> (Ball, [Stick]) -> Picture
 drawBallAndSticks config tmat (ball, sticks) =
     -- bonds first, then the atom on top: the atom covers its own near-caps,
     -- while the bond shafts (outside the atom radius) stay visible.
-    foldMap drawOneBond sortedSticks <> plotAtom (rot ball)
+    foldMap drawOneBond sortedSticks <> plotAtom config.perspective (rot ball)
   where
     rot b        = b { pos = tmat !* b.pos }              -- ball into view space
     rotStick stk = stk { end = rot stk.end }              -- only .end is used downstream
@@ -192,8 +202,8 @@ plotBond config ballk sortedStick = let
 
          -- paper-space bond delta (C bs_kernel: zp[kk]-zp[k] via atompos),
          -- normalised to the unit screen bond direction (C: bx/=xx, by/=xx).
-         V3 bdx bdy _ = atomPos perspective ballkk.pos ballkk.rad
-                    ^-^ atomPos perspective ballk.pos  ballk.rad
+         V3 bdx bdy _ = atomPos config.perspective ballkk.pos ballkk.rad
+                    ^-^ atomPos config.perspective ballk.pos  ballk.rad
          xx = sqrt (bdx^2 + bdy^2)
          bx = bdx / xx
          by = bdy / xx
@@ -210,18 +220,18 @@ plotBond config ballk sortedStick = let
          br = bndfac * sortedStick.rad    -- C: br = bndfac*stick[ib].rad
 
          -- the two bond-cap 6-vectors (C m1[]/m2[]); caps offset toward each other
-         Plucker m10 m11 m12 m13 m14 m15 = calcM perspective KEnd  bx by br ballk  cth1
-         Plucker m20 m21 m22 m23 m24 m25 = calcM perspective KKEnd bx by br ballkk cth2
+         Plucker m10 m11 m12 m13 m14 m15 = calcM config.perspective KEnd  bx by br ballk  cth1
+         Plucker m20 m21 m22 m23 m24 m25 = calcM config.perspective KKEnd bx by br ballkk cth2
   in if xx*xx < 0.0001            -- atoms project to ~the same point: skip
        then mempty
        else if config.bline
-              then Picture [Polyline [V2 m14 m15, V2 m24 m25] "black"] -- straight thin line
+              then Picture [Polyline [V2 m14 m15, V2 m24 m25] (rgbToCss sortedStick.rgb)] -- thin line
               else Picture [Polygon                                    -- thick tapered cap outline
                    ( map (\(V2 arcX arcY) -> V2 (m10*arcX + m12*arcY + m14)
                                                 (m11*arcX + m13*arcY + m15)) arcs
                   ++ map (\(V2 arcX arcY) -> V2 (-m20*arcX + m22*arcY + m24)  -- C/JS: -m2[0],-m2[1]
                                                 (-m21*arcX + m23*arcY + m25)) (reverse arcs)
-                   ) "black"]
+                   ) (rgbToCss sortedStick.rgb)]
 
 -- | Per-end bond-cap 6-vector, mirroring C bs_kernel's m1[]/m2[] (subs.h ~1248).
 --   bx,by,br are bond-level (need both atoms + the stick), so they stay params;
@@ -265,8 +275,8 @@ stick bondMap (ball1 : balls) = (ball1, catMaybes (map (\ball2 -> case M.lookup 
                                                  if ((dis >= bond.minLength) && dis <= bond.maxLength)
                                                  then Just (Stick { start = ball1, end = ball2
                                                                   , rad = bond.radius
-                                                                  , gray = bond.gray
-                                                                  , col = 0 })  -- palette index unused (b/w)
+                                                                  , gray = 0.5, col = 0  -- gray/col unused; colour via rgb
+                                                                  , rgb = bond.rgb })
                                                  else Nothing) balls)) : (stick bondMap balls)
 
 -- | Whole scene → Picture: z-order atoms back to front, then foldMap the core
@@ -275,10 +285,10 @@ drawScene :: Config -> Mat3 -> V.Vector (Ball, [Stick]) -> Picture
 drawScene config tmat = foldMap (drawBallAndSticks config tmat) . sortByZ tmat
 
 -- | One atom as a Disc primitive (ball is expected already in view space).
-plotAtom :: Ball -> Picture
-plotAtom ball =
-  let V3 px py pr = atomPos perspective ball.pos ball.rad   -- paper x,y + projected radius
-  in Picture [Disc (px + taux) (py + tauy) pr "gray"]       -- TODO: fill from ball.gray/rgb
+plotAtom :: Perspective -> Ball -> Picture
+plotAtom persp ball =
+  let V3 px py pr = atomPos persp ball.pos ball.rad   -- paper x,y + projected radius
+  in Picture [Disc (px + taux) (py + tauy) pr (rgbToCss ball.rgb)]
 
 -- A 2D viewport transform: maps x, y and a length/radius (each Double->Double).
 -- Local for now; may promote to a d3x multi-dimensional scale type later, driven
@@ -330,3 +340,52 @@ renderSvg pic@(Picture prims) = foldMap prim prims
     prim (Polyline pts stroke) = [hsx|<path d={d3Line (map pt pts)} fill="none" stroke={stroke}/>|]
     prim (Polygon  pts fill)   = [hsx|<path d={d3Line (map pt pts) <> "Z"} fill={fill} stroke="black"/>|]
 
+
+------------------------------------------------------------------------
+-- Live view control (used by the xbs-live interactive viewer)
+------------------------------------------------------------------------
+
+-- | Rotate a view matrix by @alfa@ radians about screen axis @ixyz@ and
+--   pre-multiply (newTmat = rot * tmat). Faithful port of C rotmat (subs.h 846);
+--   note the C axis convention: 1 = screen-y (left/right), 2 = screen-x
+--   (up/down), 3 = in-plane (ccw/cw).
+rotmat :: Int -> Double -> Mat3 -> Mat3
+rotmat ixyz alfa t = case ixyz of
+    1 -> V3 (V3 c 0 s) (V3 0 1 0) (V3 (-s) 0 c) !*! t
+    2 -> V3 (V3 1 0 0) (V3 0 c (-s)) (V3 0 s c) !*! t
+    3 -> V3 (V3 c (-s) 0) (V3 s c 0) (V3 0 0 1) !*! t
+    _ -> t
+  where c = cos alfa; s = sin alfa
+
+-- | A view/render command from the interactive driver.
+data Cmd = RotL | RotR | RotU | RotD | RotCCW | RotCW   -- arrows / ' / / / < / >
+         | TogglePersp | ToggleLine | ToggleWire         -- p / l / w
+         | ResetView                                      -- r
+         | FramePrev | FrameNext | FrameFirst | FrameLast -- [ ] j k  (stubs for now)
+         | Quit | NoOp
+  deriving (Eq, Show)
+
+-- | Apply a command to the Config. @home@ is the original view (for ResetView).
+--   Frame commands are stubs until animation is wired (see drawScene/positions).
+applyCmd :: Mat3 -> Cmd -> Config -> Config
+applyCmd home cmd cfg = case cmd of
+    RotL        -> rot 1 (-dalfa)
+    RotR        -> rot 1   dalfa
+    RotU        -> rot 2 (-dalfa)
+    RotD        -> rot 2   dalfa
+    RotCCW      -> rot 3   dalfa
+    RotCW       -> rot 3 (-dalfa)
+    TogglePersp -> cfg { perspective = not cfg.perspective }
+    ToggleLine  -> cfg { bline = not cfg.bline }
+    ToggleWire  -> cfg                                  -- wire mode: TODO
+    ResetView   -> cfg { tmat = home }
+    _           -> cfg                                  -- frames (stub), Quit/NoOp: driver handles
+  where rot ax a = cfg { tmat = rotmat ax a cfg.tmat }
+
+-- | Render the scene for the current Config to a standalone SVG document
+--   (one render per interactive frame). Bonds are precomputed once and passed in.
+renderConfigSvg :: Config -> V.Vector (Ball, [Stick]) -> Text
+renderConfigSvg cfg ballsAndSticks =
+  renderMarkupText
+    (svgViewBox (round width) (round height)
+                (renderSvg (drawScene cfg cfg.tmat ballsAndSticks)))

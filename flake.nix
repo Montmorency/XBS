@@ -15,10 +15,16 @@
             url = "path:/Users/lambert/projects/ihp-projects/d3x";
             flake = false;
         };
+    # CC-delcont (delimited continuations) for xbs-live's input loop. nixpkgs'
+    # CC-delcont is marked broken, so we build the local checkout instead.
+    cc-delcont = {
+        url = "path:/Users/lambert/projects/CC-delcont";
+        flake = false;
+    };
   };
 
   outputs =
-    { self, nixpkgs, ihp, d3x }:
+    { self, nixpkgs, ihp, d3x, cc-delcont }:
     let
       allSystems = [
         "x86_64-linux"
@@ -62,6 +68,8 @@
               # as 1.6.0 — satisfying d3x's `ihp-hsx >= 1.6` bound.
               ihp-hsx = hfinal.callPackage "${ihp}/ihp-hsx/default.nix" { };
               d3x = hfinal.callPackage "${d3x}/default.nix" { };
+              # local CC-delcont overrides nixpkgs' broken one
+              CC-delcont = hfinal.callPackage "${cc-delcont}/default.nix" { };
               xbs-hs = hfinal.callPackage ./xbs-hs/default.nix { };
             }
           );
