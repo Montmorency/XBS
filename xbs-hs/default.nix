@@ -2,7 +2,7 @@
 # top-level flake.nix. Regenerate after changing xbs-hs.cabal with:
 #   nix run nixpkgs#cabal2nix -- ./xbs-hs > xbs-hs/default.nix
 { mkDerivation, base, brick, bytestring, oleg-delimcc, containers, d3x, directory
-, filepath, hspec, http-types, ihp-hsx, lens, lib, linear, mtl, stm, text
+, filepath, hspec, http-types, ihp-hsx, lens, lib, linear, microlens, mtl, stm, text
 , uu-parsinglib, vector, vector-algorithms, vty, vty-crossplatform
 , wai, warp
 }:
@@ -18,7 +18,7 @@ mkDerivation {
   ];
   executableHaskellDepends = [
     base brick bytestring containers oleg-delimcc d3x directory filepath http-types ihp-hsx
-    mtl stm text vector vty vty-crossplatform wai warp
+    microlens mtl stm text vector vty vty-crossplatform wai warp
   ];
   testHaskellDepends = [ base containers hspec linear text ];
   doCheck = false;   # tests read ../examples (not in the nix src); run via `cabal test`

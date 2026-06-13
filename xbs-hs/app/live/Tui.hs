@@ -5,18 +5,22 @@
 
 -- | xbs-live's brick TUI head: a two-column terminal frontend on the shared
 --   'App' state. Column 0 is a drill-down file explorer (load any sibling .bs at
---   runtime); column 1 is the controller — a live mirror of the render state plus
---   the key legend. Focus moves between columns with Tab or M-[ / M-]; the focused
---   column consumes the arrow keys (tree navigation vs. molecule rotation). The
---   explorer writes 'LoadFile' / the controller writes 'Act' into the same
---   'cmdQ' the browser and terminal use, and a watcher mirrors 'statusTV' changes
---   (incl. browser-driven ones) back into the controller pane.
+--   runtime); column 1 stacks the controller (a live mirror of the render state +
+--   key legend) over a braille preview of the molecule (so a pure-CLI user can
+--   rotate and orient with no browser). Focus moves between columns with Tab/S-Tab
+--   or M-h/M-l; the focused column consumes the arrow keys (tree navigation vs.
+--   molecule rotation). The explorer writes 'LoadFile' / the controller writes
+--   'Act' into the same 'cmdQ' the browser and terminal use, and a watcher mirrors
+--   the shared render state (incl. browser-driven changes) back into the panes.
 --
 --   Structure follows utdemir's nix-tree (Brick.Widgets.List columns +
---   customMainWithDefaultVty + a BChan fed by a background thread).
+--   customMainWithDefaultVty + a BChan fed by a background thread). The preview is
+--   a size-aware widget rasterized by "Braille".
 module Tui (run) where
 
 import Types
+import XBS                                    (Picture)
+import Braille                                (renderBraille)
 
 import qualified Brick                       as B
 import qualified Brick.BChan                 as B
@@ -24,6 +28,7 @@ import qualified Brick.Widgets.Border        as B
 import qualified Brick.Widgets.Border.Style  as BS
 import qualified Brick.Widgets.List          as B
 import           Brick.Util                  (on)
+import           Lens.Micro                  ((^.))
 import qualified Graphics.Vty                as V
 
 import qualified Data.Sequence               as Seq
@@ -48,18 +53,20 @@ data Entry = Entry { eName :: String, eIsDir :: Bool }
 
 type FileList = B.GenericList TName Seq Entry
 
--- | TUI state. The render state proper lives in 'App'/'statusTV'; here we keep
---   only what the terminal frontend owns: the explorer cursor and the focus.
+-- | TUI state. The render state proper lives in 'App'; here we keep the explorer
+--   cursor, the focus, and a snapshot of the shared 'Status'/'Picture' (refreshed
+--   on each 'Redraw') that the controller and preview panes draw from.
 data TState = TState
-  { tsCwd    :: FilePath
-  , tsList   :: FileList
-  , tsFocus  :: TName
-  , tsStatus :: Status
+  { tsCwd     :: FilePath
+  , tsList    :: FileList
+  , tsFocus   :: TName
+  , tsStatus  :: Status
+  , tsPicture :: Picture
   }
 
--- | Custom brick event: the shared 'statusTV' changed (driver re-rendered, or the
---   browser drove a command), so refresh the controller pane.
-newtype TEvent = StatusChanged Status
+-- | Custom brick event: the driver re-rendered (rotation, zoom, frame, load, or a
+--   browser-driven command), so pull the latest 'Status'/'Picture' and repaint.
+data TEvent = Redraw
 
 -- | Launch the TUI. brick owns the main thread + vty; returning ends the process.
 run :: App -> FilePath -> IO ()
@@ -67,22 +74,26 @@ run app startPath = do
   startDir <- canonicalizePath (takeDirectory startPath)
   entries  <- listDir startDir
   status0  <- readTVarIO app.statusTV
+  pic0     <- readTVarIO app.pictureTV
   let ts0 = TState { tsCwd = startDir, tsList = mkList entries
-                   , tsFocus = Explorer, tsStatus = status0 }
+                   , tsFocus = Explorer, tsStatus = status0, tsPicture = pic0 }
   chan <- B.newBChan 16
   _ <- forkIO (watch app chan)
   (_, vty) <- B.customMainWithDefaultVty (Just chan) (theApp app) ts0
   V.shutdown vty
 
--- | Mirror every 'statusTV' change into the TUI via the BChan. STM @retry@ blocks
---   until the value actually differs (matches nix-tree's background feeder).
+-- | Wake the TUI on every render. STM @retry@ blocks on the driver's tick counter
+--   so we repaint for *visual* changes (rotation, zoom, …) — not just 'Status'
+--   ones (matches nix-tree's background feeder). The handler then pulls the latest
+--   'Status'/'Picture'; @writeBChanNonBlocking@ self-throttles bursts (drops when
+--   full) so fast browser drags don't flood the queue.
 watch :: App -> B.BChan TEvent -> IO ()
-watch app chan = readTVarIO app.statusTV >>= loop
+watch app chan = readTVarIO app.tickTV >>= loop
   where
     loop old = do
-      void (B.writeBChanNonBlocking chan (StatusChanged old))
+      void (B.writeBChanNonBlocking chan Redraw)
       new <- atomically $ do
-               v <- readTVar app.statusTV
+               v <- readTVar app.tickTV
                if v == old then retry else pure v
       loop new
 
@@ -110,9 +121,26 @@ draw ts =
   [ B.hBox
       [ B.hLimitPercent 45 $
           pane (ts.tsFocus == Explorer) (" explorer: " <> ts.tsCwd <> " ") (explorerW ts)
-      , pane (ts.tsFocus == Controller) " controller " (controllerW ts)
+      , pane (ts.tsFocus == Controller) " controller " (rightPane ts)
       ]
   ]
+
+-- | The controls/status (natural height) above the braille preview (fills the rest).
+rightPane :: TState -> B.Widget TName
+rightPane ts =
+  B.vBox [ controllerW ts
+         , B.hBorderWithLabel (B.str " preview ")
+         , previewW ts.tsPicture ]
+
+-- | Size-aware braille preview: rasterizes the current 'Picture' to fill whatever
+--   space brick allots this pane, reflowing on resize. The molecule reflows live
+--   as the controller rotates/zooms it.
+previewW :: Picture -> B.Widget TName
+previewW pic = B.Widget B.Greedy B.Greedy $ do
+  ctx <- B.getContext
+  let cols = ctx ^. B.availWidthL
+      rows = ctx ^. B.availHeightL
+  B.render (B.vBox (map B.txt (renderBraille cols rows pic)))
 
 -- | A bordered column; the focused one gets a bold border so it's obvious which
 --   column the arrow keys are driving.
@@ -127,7 +155,7 @@ explorerW ts = B.renderList renderEntry (ts.tsFocus == Explorer) ts.tsList
     renderEntry _ e = B.str ((if e.eIsDir then "▸ " else "  ") <> e.eName)
 
 controllerW :: TState -> B.Widget TName
-controllerW ts = B.padBottom B.Max $ B.vBox $ map B.str
+controllerW ts = B.vBox $ map B.str
   [ "file:   " <> s.sFile
   , "atoms:  " <> show s.sNatoms
   , "frame:  " <> frameLine s
@@ -162,9 +190,12 @@ handleEvent :: App -> B.BrickEvent TName TEvent -> B.EventM TName TState ()
 handleEvent app ev = do
   ts <- get
   case ev of
-    B.AppEvent (StatusChanged s) -> put ts { tsStatus = s }
-    B.VtyEvent (V.EvKey k mods)  -> handleKey app ts k mods
-    _                            -> pure ()
+    B.AppEvent Redraw           -> do
+      s <- liftIO (readTVarIO app.statusTV)
+      p <- liftIO (readTVarIO app.pictureTV)
+      put ts { tsStatus = s, tsPicture = p }
+    B.VtyEvent (V.EvKey k mods) -> handleKey app ts k mods
+    _                           -> pure ()
 
 handleKey :: App -> TState -> V.Key -> [V.Modifier] -> B.EventM TName TState ()
 handleKey app ts k mods

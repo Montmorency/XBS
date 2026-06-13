@@ -42,6 +42,7 @@ library
     exposed-modules:
         XBS
         , ParseXBS
+        , Braille
     build-depends:
           base >= 4.17.0 && < 4.22
         , text
@@ -92,6 +93,7 @@ executable xbs-live
         , oleg-delimcc
         , brick >= 2.1
         , mtl
+        , microlens
         , containers
         , vty
         , vty-crossplatform

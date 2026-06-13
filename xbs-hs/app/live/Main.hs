@@ -114,8 +114,10 @@ runLive path = do
   focusV  <- newTVarIO ([] :: [Int])
   ballsV  <- newTVarIO (V.fromList scene.balls)
   statusV <- newTVarIO (statusOf scene cfg0 (length scene.balls) [])
+  pictV   <- newTVarIO (mempty :: Picture)
+  tickV   <- newTVarIO (0 :: Int)
   cmdq    <- newTChanIO
-  let app = App tvar focusV ballsV cmdq htmxJs' statusV
+  let app = App tvar focusV ballsV cmdq htmxJs' statusV pictV tickV
 
   -- browser head: SSE + htmx server
   _ <- forkIO (run port (sseApp app))
@@ -174,10 +176,13 @@ driver app scene0 cfg0 = runCC $ do
         -- read the focus stack, stash the frame's balls, render SVG + status
         publish scene cfg bs = liftIO $ do
           focus <- readTVarIO app.focusTV
+          let pic = drawScene cfg cfg.tmat bs        -- the IR the TUI rasterizes to braille
           atomically $ do
             writeTVar app.ballsTV (V.map fst bs)
             writeTVar app.tv (renderConfigSvg focus cfg bs)
             writeTVar app.statusTV (statusOf scene cfg (V.length bs) focus)
+            writeTVar app.pictureTV pic
+            modifyTVar' app.tickTV (+1)              -- wake the TUI on every visual change
         -- apply a discrete Cmd; rebuild the scene only on frame change
         runCmd scene cmd cfg bs = case cmd of
           Quit -> pure ()                                 -- not reachable; loop just ends

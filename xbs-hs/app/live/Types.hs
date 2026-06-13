@@ -11,7 +11,7 @@ module Types
   , evToCmd
   ) where
 
-import XBS (Cmd(..), Ball)
+import XBS (Cmd(..), Ball, Picture)
 
 import           Data.Text               (Text)
 import qualified Data.Vector             as V
@@ -38,6 +38,8 @@ data App = App
   , cmdQ     :: TChan Input           -- ^ terminal + browser + TUI inputs the listener reads
   , htmxJs   :: LBS.ByteString        -- ^ vendored htmx.min.js (for the atom-click hx-get)
   , statusTV :: TVar Status           -- ^ live view state, mirrored into the TUI controller pane
+  , pictureTV:: TVar Picture          -- ^ current scene as the backend-neutral IR (TUI rasterizes it)
+  , tickTV   :: TVar Int              -- ^ render counter, bumped every publish; wakes the TUI watcher
   }
 
 -- | A snapshot of the render loop's 'Config' (+ scene facts) for the TUI
