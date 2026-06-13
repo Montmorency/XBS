@@ -2,18 +2,20 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE RankNTypes #-}
 
--- | xbs-live: interactive ball-and-stick viewer.
---   Serves the current render over Server-Sent Events on :9090 (open the page in
---   a browser); drives the view from the terminal (vty). The input loop is a
---   delimited-continuation coroutine (CC-delcont): each keypress suspends at a
+-- | xbs-live: interactive ball-and-stick viewer with three heads on one shared
+--   command queue — a browser (SSE on :9090), the legacy terminal keypress path,
+--   and a brick TUI (file explorer + controller, see "Tui"). The render loop is a
+--   delimited-continuation coroutine (CC-delcont): each input suspends at a
 --   prompt, the rest-of-the-render-loop is the captured continuation, and we
---   resume with the key. Config is the loop accumulator (no shared Config TVar);
---   the only shared cell is the latest-SVG TVar the SSE handler streams from.
+--   resume with the input. 'Config' is the loop accumulator; the cross-thread
+--   cells (latest SVG, focus, balls, status) live in 'App' (see "Types").
 
 module Main (main) where
 
 import XBS
 import ParseXBS (loadBs, parseMv)
+import Types
+import qualified Tui
 
 import qualified Data.Vector            as V
 import qualified Data.Text              as T
@@ -25,11 +27,11 @@ import qualified Data.ByteString.Lazy   as LBS
 
 import           Control.Concurrent      (forkIO)
 import           Control.Concurrent.STM
-import           Control.Exception       (finally)
-import           Control.Monad           (forever, join)
+import           Control.Exception       (try, SomeException, evaluate)
+import           Control.Monad           (join)
 import           Control.Monad.IO.Class  (liftIO)
 import           System.Environment      (getArgs)
-import           System.FilePath         (replaceExtension)
+import           System.FilePath         (replaceExtension, takeFileName)
 import           System.Directory        (doesFileExist)
 import           Text.Read               (readMaybe)
 
@@ -38,9 +40,6 @@ import           Control.Monad.CC.CCRef  -- multi-prompt delimited control (Oleg
 import           Network.Wai
 import           Network.Wai.Handler.Warp (run)
 import           Network.HTTP.Types       (status200, status404, hContentType, hCacheControl)
-
-import qualified Graphics.Vty            as Vty
-import qualified Graphics.Vty.CrossPlatform as VC  -- vty>=6 moved mkVty here
 
 port :: Int
 port = 9090
@@ -54,7 +53,7 @@ main = do
     _                 -> putStrLn "usage: xbs-live [--dump] <file.bs>"
 
 -- | Print the markup the server emits (page shell, a sample data panel, one live
---   SVG frame) without starting vty/warp. For eyeballing the htmx wiring offline.
+--   SVG frame) without starting the TUI/warp. For eyeballing the htmx wiring offline.
 dumpHtml :: FilePath -> IO ()
 dumpHtml path = do
   src <- readFile path
@@ -72,56 +71,58 @@ dumpHtml path = do
 --   Empty when there's no sibling @.mv@ (static single-frame view).
 type Movie = V.Vector (V.Vector Vec3)
 
--- | One unit of input to the render loop. Both the terminal (vty keypresses,
---   pumped by a thread) and the browser feed the same queue, so every input
---   mutates the one 'Config' and broadcasts to all viewers — terminal and every
---   browser stay in sync automatically. The delimcc listener selects over it.
-data Input = Key Vty.Event          -- ^ a terminal keypress
-           | Act Cmd                -- ^ a browser view command (keydown / wheel → /cmd)
-           | RotDelta Double Double  -- ^ a browser pointer-drag (dx,dy px → versor rotate)
-           | Refocus                -- ^ the browser changed the focus stack; just re-render
+-- | Everything that defines the currently-displayed structure. Swapped wholesale
+--   when the TUI sends 'LoadFile', so the driver can change files at runtime.
+data Scene = Scene
+  { sceneFile :: FilePath  -- ^ path of the loaded .bs (for the status basename)
+  , home      :: Mat3      -- ^ original tmat, for ResetView
+  , bondMap   :: BondMap
+  , balls     :: [Ball]
+  , movie     :: Movie
+  , nframes   :: Int       -- ^ movie length (1 when static); drives frame wraparound
+  }
+
+-- | Load a .bs (+ sibling .mv) into a 'Scene' and its initial 'Config'.
+buildScene :: FilePath -> IO (Scene, Config)
+buildScene path = do
+  src <- readFile path
+  let (cfg0, bls, bm) = loadBs src
+  mv <- loadMovie path (length bls)
+  let scene = Scene { sceneFile = path, home = cfg0.tmat, bondMap = bm
+                    , balls = bls, movie = mv, nframes = max 1 (V.length mv) }
+  pure (scene, cfg0)
+
+-- | Project the render loop's 'Config' (+ scene facts) into the TUI controller's
+--   'Status' snapshot.
+statusOf :: Scene -> Config -> Int -> [Int] -> Status
+statusOf scene cfg natoms focus = Status
+  { sFile = takeFileName scene.sceneFile, sNatoms = natoms
+  , sFrame = cfg.frame, sNframes = scene.nframes
+  , sZoom = cfg.zoom, sPersp = cfg.perspective
+  , sBline = cfg.bline, sWire = cfg.wire, sFocus = focus }
 
 -- | Pointer-drag rotation sensitivity (radians per pixel).
 dragSens :: Double
 dragSens = 0.01
 
--- | Shared state + static assets handed to the warp app and the driver. The
---   render loop owns 'Config' (its accumulator); these are the cross-thread cells.
-data App = App
-  { tv      :: TVar Text             -- ^ latest rendered SVG (SSE broadcast cell)
-  , focusTV :: TVar [Int]            -- ^ the focus stack (selected atom indices), newest first
-  , ballsTV :: TVar (V.Vector Ball)  -- ^ current-frame balls (for the data panel)
-  , cmdQ    :: TChan Input           -- ^ terminal + browser inputs the listener reads
-  , htmxJs  :: LBS.ByteString        -- ^ vendored htmx.min.js (for the atom-click hx-get)
-  }
-
 runLive :: FilePath -> IO ()
 runLive path = do
+  (scene, cfg0) <- buildScene path
+  htmxJs' <- readAsset "static/htmx.min.js"       -- served at /htmx.min.js
 
-  -- | Switch readFile to open a streaming connection
-  src <- readFile path
+  tvar    <- newTVarIO ("" :: Text)
+  focusV  <- newTVarIO ([] :: [Int])
+  ballsV  <- newTVarIO (V.fromList scene.balls)
+  statusV <- newTVarIO (statusOf scene cfg0 (length scene.balls) [])
+  cmdq    <- newTChanIO
+  let app = App tvar focusV ballsV cmdq htmxJs' statusV
 
-  let (cfg0, balls, bondMap) = loadBs src
-      home  = cfg0.tmat                          -- for the reset key
-
-  movie  <- loadMovie path (length balls)        -- sibling <file>.mv, if present
-  htmxJs <- readAsset "static/htmx.min.js"       -- served at /htmx.min.js
-
-  tvar   <- newTVarIO ("" :: Text)
-  focusV <- newTVarIO ([] :: [Int])
-  ballsV <- newTVarIO (V.fromList balls)
-  cmdq   <- newTChanIO
-  let app = App tvar focusV ballsV cmdq htmxJs
-
-  _  <- forkIO (run port (sseApp app))
-
-  vty <- VC.mkVty Vty.defaultConfig
-  -- pump terminal events into the shared queue (browser /focus writes Refocus there too)
-  _  <- forkIO (forever (Vty.nextEvent vty >>= atomically . writeTChan cmdq . Key))
-
-  Vty.update vty $ Vty.picForImage $ Vty.string Vty.defAttr (xbsDocString port (V.length movie))
-
-  driver app home bondMap balls movie cfg0 `finally` Vty.shutdown vty
+  -- browser head: SSE + htmx server
+  _ <- forkIO (run port (sseApp app))
+  -- render loop: drains the shared queue, publishes SVG/status to the TVars
+  _ <- forkIO (driver app scene cfg0)
+  -- TUI head: brick owns the main thread + vty; quitting it ends the process
+  Tui.run app path
 
 -- | Read a vendored static asset; warn (and serve nothing) if absent so the app
 --   still starts — the SVG renders, only browser interactivity is lost.
@@ -138,12 +139,8 @@ readAsset p = do
 --
 --   EAGER for now: the whole movie is parsed and held resident (the comprehension
 --   forces every frame). Fine for ring.mv (~122 KB); revisit for large trajectories.
---   TODO(streaming): swap this whole-file load for on-demand frame fetch. Options:
---     * pipes/conduit — stream frames off disk, advance pulls the next element;
---     * a delimcc zipper — the captured render-loop continuation (listenForChar's
---       @p@) is already the suspension seam, so a frame could be yielded into the
---       loop per keypress instead of indexing a resident Vector. See memory
---       [[xbs-mv-streaming-followup]].
+--   TODO(streaming): swap this whole-file load for on-demand frame fetch — see
+--   memory [[xbs-mv-streaming-followup]].
 loadMovie :: FilePath -> Int -> IO Movie
 loadMovie path natoms = do
   let mvPath = replaceExtension path "mv"
@@ -165,83 +162,59 @@ sceneAt bondMap balls movie f
           balls' = zipWith (\b p -> b { pos = p }) balls (V.toList coords)
       in V.fromList (stick bondMap balls')
 
-
-xbsDocString :: Int -> Int -> String
-xbsDocString port nframes =
-  "xbs-live -> http://localhost:" <> show port
-  <> "   (arrows ',/ rotate, <> spin, +/- zoom, p persp, l line, w wire, r reset, q quit"
-  <> framesHint <> ")"
-  where framesHint = if nframes > 1 then ", [ ] j k frames(" <> show nframes <> ")" else ""
-
-
 -- | Delimited-continuation driver: render+publish → suspend for an 'Input' →
---   apply. Inputs arrive from both the terminal and the browser via one queue.
---   A 'Key' may rotate/zoom/step frames (rebuilds the scene only when the frame
---   index changes); a 'Refocus' just re-renders so browser-selected atoms light
---   up in the SVG. @nframes@ drives modular frame wraparound in 'applyCmd'.
-driver :: App -> Mat3 -> BondMap -> [Ball] -> Movie -> Config -> IO ()
-driver app home bondMap balls movie cfg0 = runCC $ do
+--   apply. Inputs arrive from the terminal, the browser, and the brick TUI via one
+--   queue. A view 'Cmd' may rotate/zoom/step frames (rebuilds the scene only when
+--   the frame index changes); 'Refocus' just re-renders; 'LoadFile' swaps the
+--   whole 'Scene'. @scene.nframes@ drives modular frame wraparound in 'applyCmd'.
+driver :: App -> Scene -> Config -> IO ()
+driver app scene0 cfg0 = runCC $ do
     p <- newPrompt
-    let nframes    = max 1 (V.length movie)
-        sceneFor f = sceneAt bondMap balls movie f
-        -- read the focus stack, stash the frame's balls for the data panel, render
-        publish cfg bs = liftIO $ do
+    let sceneFor scene f = sceneAt scene.bondMap scene.balls scene.movie f
+        -- read the focus stack, stash the frame's balls, render SVG + status
+        publish scene cfg bs = liftIO $ do
           focus <- readTVarIO app.focusTV
           atomically $ do
             writeTVar app.ballsTV (V.map fst bs)
             writeTVar app.tv (renderConfigSvg focus cfg bs)
-        -- apply a discrete Cmd (from terminal or browser); rebuild scene on frame change
-        runCmd cmd cfg bs = case cmd of
-          Quit -> pure ()
-          _    -> let cfg' = applyCmd home nframes cmd cfg
-                      bs'  = if cfg'.frame == cfg.frame then bs else sceneFor cfg'.frame
-                  in go cfg' bs'
-        go cfg bs = do
-          publish cfg bs
+            writeTVar app.statusTV (statusOf scene cfg (V.length bs) focus)
+        -- apply a discrete Cmd; rebuild the scene only on frame change
+        runCmd scene cmd cfg bs = case cmd of
+          Quit -> pure ()                                 -- not reachable; loop just ends
+          _    -> let cfg' = applyCmd scene.home scene.nframes cmd cfg
+                      bs'  = if cfg'.frame == cfg.frame then bs else sceneFor scene cfg'.frame
+                  in go scene cfg' bs'
+        -- swap to a freshly-loaded file; a bad/missing file keeps the current scene
+        reload scene cfg bs path = do
+          r <- liftIO . try $ do
+                 sc@(scene', _) <- buildScene path
+                 _ <- evaluate (length scene'.balls)      -- force read/parse to catch errors here
+                 pure sc
+          case (r :: Either SomeException (Scene, Config)) of
+            Left _                -> go scene cfg bs
+            Right (scene', cfg0') -> do
+              liftIO (atomically (writeTVar app.focusTV []))   -- selection is per-structure
+              go scene' cfg0' (sceneFor scene' cfg0'.frame)
+        go scene cfg bs = do
+          publish scene cfg bs
           inp <- listenForInput p app.cmdQ
           case inp of
-            Refocus        -> go cfg bs                   -- selection changed: re-render only
-            Key ev         -> runCmd (evToCmd ev) cfg bs
-            Act cmd        -> runCmd cmd cfg bs
-            RotDelta dx dy -> go (cfg { tmat = rotmat 1 (dragSens*dx)
-                                                 (rotmat 2 (dragSens*dy) cfg.tmat) }) bs
-    pushPrompt p (go cfg0 (sceneFor cfg0.frame))
+            Refocus        -> go scene cfg bs               -- selection changed: re-render only
+            Key ev         -> runCmd scene (evToCmd ev) cfg bs
+            Act cmd        -> runCmd scene cmd cfg bs
+            LoadFile path  -> reload scene cfg bs path
+            RotDelta dx dy -> go scene (cfg { tmat = rotmat 1 (dragSens*dx)
+                                                       (rotmat 2 (dragSens*dy) cfg.tmat) }) bs
+    pushPrompt p (go scene0 cfg0 (sceneFor scene0 cfg0.frame))
 
 -- | The suspension point: capture the render-loop continuation at @p@, block for
---   the next 'Input' (terminal key or browser refocus), resume. The captured
---   continuation is the seam for future focus -> calc/DB interleaving.
+--   the next 'Input', resume. The captured continuation is the seam for future
+--   focus -> calc/DB interleaving.
 listenForInput :: Prompt IO () -> TChan Input -> CC IO Input
 listenForInput p q = takeSubCont p $ \sk ->
     pushPrompt p $ do
         inp <- liftIO (atomically (readTChan q))
         pushSubCont sk (pure inp)
-
-evToCmd :: Vty.Event -> Cmd
-evToCmd (Vty.EvKey k _) = case k of
-    Vty.KLeft      -> RotL
-    Vty.KRight     -> RotR
-    Vty.KUp        -> RotU
-    Vty.KDown      -> RotD
-    Vty.KChar '\'' -> RotU
-    Vty.KChar '/'  -> RotD
-    Vty.KChar '<'  -> RotCCW
-    Vty.KChar '>'  -> RotCW
-    Vty.KChar 'p'  -> TogglePersp
-    Vty.KChar 'l'  -> ToggleLine
-    Vty.KChar 'w'  -> ToggleWire
-    Vty.KChar '+'  -> ZoomIn
-    Vty.KChar '='  -> ZoomIn            -- unshifted '+' key
-    Vty.KChar '-'  -> ZoomOut
-    Vty.KChar '_'  -> ZoomOut           -- shifted '-' key
-    Vty.KChar 'r'  -> ResetView
-    Vty.KChar '['  -> FramePrev
-    Vty.KChar ']'  -> FrameNext
-    Vty.KChar 'j'  -> FrameFirst
-    Vty.KChar 'k'  -> FrameLast
-    Vty.KChar 'q'  -> Quit
-    Vty.KEsc       -> Quit
-    _              -> NoOp
-evToCmd _ = NoOp
 
 ------------------------------------------------------------------------
 -- SSE web server (warp + wai)
@@ -262,8 +235,7 @@ sseApp app req respond = case pathInfo req of
 -- | Browser view command (@GET /cmd?c=…@): keystrokes/wheel map to a discrete
 --   'Cmd' (@c=rotl|zoomin|wire|framenext|…@), and pointer-drag sends
 --   @c=rot&dx=..&dy=..@ → 'RotDelta'. Writes into the shared queue, so the browser
---   drives the exact same Config the terminal does. (Quit is intentionally NOT
---   reachable from the browser — one viewer shouldn't kill a shared session.)
+--   drives the exact same Config the terminal and TUI do.
 cmdHandler :: App -> Application
 cmdHandler app req respond = do
   case TE.decodeUtf8 <$> join (lookup "c" q) of

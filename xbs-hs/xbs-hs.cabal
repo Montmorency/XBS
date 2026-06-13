@@ -81,12 +81,18 @@ executable xbs-live
     default-language: GHC2021
     hs-source-dirs: app/live
     main-is: Main.hs
+    other-modules:
+        Types
+        , Tui
     -- warp + the forked SSE server need the threaded RTS
     ghc-options: -threaded -rtsopts
     build-depends:
           base >= 4.17.0 && < 4.22
         , xbs-hs
         , oleg-delimcc
+        , brick >= 2.1
+        , mtl
+        , containers
         , vty
         , vty-crossplatform
         , warp
