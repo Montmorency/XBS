@@ -20,6 +20,7 @@ import XBS (Picture(..), Prim(..), pictureExtent)
 
 import           Data.Text             (Text)
 import qualified Data.Text             as T
+import qualified Data.Map.Strict       as Map
 import qualified Data.Vector.Unboxed   as VU
 import           Linear                (V2(..))
 import           D3X.Scales            (Domain(..))
@@ -33,9 +34,9 @@ renderBraille cols rows pic
   where
     dotW = 2*cols ; dotH = 4*rows
     grid :: VU.Vector Bool
-    grid = VU.replicate (dotW*dotH) False VU.//
-             [ (y*dotW + x, True)
-             | (x,y) <- rasterPoints dotW dotH pic
+    grid = VU.accum (\_ b -> b) (VU.replicate (dotW*dotH) False)
+             [ (y*dotW + x, b)
+             | (x,y,b) <- rasterUpdates dotW dotH pic
              , x >= 0, x < dotW, y >= 0, y < dotH ]
     on x y = grid `VU.unsafeIndex` (y*dotW + x)
     packRow cy = T.pack [ glyph cx cy | cx <- [0 .. cols-1] ]
@@ -47,20 +48,46 @@ renderBraille cols rows pic
                  + bit (bx+1) (by+2) 0x20 + bit (bx+1)(by+3) 0x80
             bit x y v = if on x y then v else (0 :: Int)
 
--- | Map a 'Picture' into braille-dot coordinates and emit every lit dot (one
---   uniform fit-scale, y flipped). Atoms → circle outlines, bonds → line strokes.
-rasterPoints :: Int -> Int -> Picture -> [(Int,Int)]
-rasterPoints dotW dotH pic@(Picture prims) = concatMap draw prims
+-- | Per-prim raster updates in Picture order (already z-sorted, back to front), as
+--   @(x, y, on?)@ so 'renderBraille' can apply them last-write-wins and let front
+--   atoms occlude what's behind. A solid atom first clears a one-dot-wider disc
+--   (the "moat": occludes back geometry AND leaves a separating ring) then fills.
+--   Hollow atoms (fill @"none"@ = wireframe) stay outlines and thin bonds stay
+--   strokes, so the SVG's @w@ (wire) and @l@ (line) toggles carry through unchanged.
+rasterUpdates :: Int -> Int -> Picture -> [(Int,Int,Bool)]
+rasterUpdates dotW dotH pic@(Picture prims) = concatMap draw prims
   where
     (sc, cx0, cy0) = fitScale dotW dotH pic
     mx = fromIntegral dotW / 2 ; my = fromIntegral dotH / 2
     rx x = round (mx + sc*(x - cx0)) :: Int
     ry y = round (my - sc*(y - cy0)) :: Int     -- flip y (screen points down)
-    draw (Disc _ cx cy r _) = circlePts (rx cx) (ry cy) (max 1 (round (sc*r)))
-    draw (Polyline ps _)    = polyPts ps
-    draw (Polygon  ps _)    = polyPts (ps ++ take 1 ps)        -- close the outline
-    polyPts ps = concat (zipWith seg ps (drop 1 ps))
+    paint b = map (\(x,y) -> (x, y, b))
+    draw (Disc _ cx cy r fill)
+      | fill == "none" = paint True (circlePts cX cY rr)             -- wireframe: outline
+      | otherwise      = paint False (disk cX cY (rr+1))             -- moat: occlude + ring
+                      ++ paint True  (disk cX cY rr)                 -- solid ball
+      where cX = rx cx ; cY = ry cy ; rr = max 1 (round (sc*r))
+    draw (Polyline ps _)   = paint True (stroke ps)                  -- thin bond
+    draw (Polygon  ps fill)
+      | fill == "none" = paint True (stroke (close ps))              -- outline
+      | otherwise      = paint True (fillSpans (stroke (close ps)))  -- solid bond
+    close ps  = ps ++ take 1 ps
+    stroke ps = concat (zipWith seg ps (drop 1 ps))
     seg (V2 x0 y0) (V2 x1 y1) = bresenham (rx x0, ry y0) (rx x1, ry y1)
+
+-- | A filled disc: the midpoint-circle boundary, then fill each scanline between its
+--   extremes (the convex case of METAFONT's per-row edge fill, mf.web ch.20/22).
+disk :: Int -> Int -> Int -> [(Int,Int)]
+disk cx cy r = fillSpans (circlePts cx cy r)
+
+-- | Convex scanline fill: span each row from its leftmost to rightmost boundary x.
+--   Exact for discs and convex bond quads (our only filled shapes).
+fillSpans :: [(Int,Int)] -> [(Int,Int)]
+fillSpans pts =
+  [ (x,y) | (y,(lo,hi)) <- Map.toList spans, x <- [lo .. hi] ]
+  where
+    spans = Map.fromListWith (\(a,b) (c,d) -> (min a c, max b d))
+                             [ (y, (x,x)) | (x,y) <- pts ]
 
 -- | Uniform paper→dot scale fitting the Picture's extent into @dotW@×@dotH@ with a
 --   one-dot margin, plus the data centre. Same fit philosophy as 'XBS.viewportScale'.
