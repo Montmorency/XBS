@@ -6,8 +6,8 @@
     # We can't take ihp-hsx from the nixpkgs Hackage snapshot: that's still
     # 1.5.0 (blaze backend + IHP.HSX.Parser only), and d3x needs the 1.6
     # ByteString-Builder backend (IHP.HSX.Markup / IHP.HSX.MarkupQQ).
-    ihp.url = "github:digitallyinduced/ihp";
-    nixpkgs.follows = "ihp/nixpkgs";
+        ihp.url = "github:digitallyinduced/ihp";
+        nixpkgs.follows = "ihp/nixpkgs";
     # d3x supplies the scale typeclasses, d3Line primitives, etc. that xbs-hs
     # builds on. Sourced as a sibling checkout; share ihp + nixpkgs so the
     # Haskell package set stays coherent across the whole tree.
@@ -17,10 +17,7 @@
     # OCaml interface) for xbs-live's input loop. Built from the local checkout
     # (repo: Montmorency/CCRef); we ship this ourselves rather than depend on
     # nixpkgs' broken CC-delcont.
-    oleg-delimcc = {
-        url = "path:/Users/lambert/projects/CCRef";
-        flake = false;
-    };
+        oleg-delimcc.url = "github:Montmorency/d3x";
   };
 
   outputs =
