@@ -11,10 +11,7 @@
     # d3x supplies the scale typeclasses, d3Line primitives, etc. that xbs-hs
     # builds on. Sourced as a sibling checkout; share ihp + nixpkgs so the
     # Haskell package set stays coherent across the whole tree.
-        d3x = {
-            url = "path:/Users/lambert/projects/ihp-projects/d3x";
-            flake = false;
-        };
+        d3x.url = "github:Montmorency/d3x";
     # oleg-delimcc (multi-prompt delimited control via reference cells —
     # Oleg's reference impl of Dybvig/Peyton Jones/Sabry, mirroring delimcc's
     # OCaml interface) for xbs-live's input loop. Built from the local checkout
