@@ -6,4 +6,12 @@ xbs-hs flow:
         ├ plotAtom :: Ball -> Picture                  -- Disc
         └ plotBond :: Config -> Ball -> Stick -> Picture  -- Polyline (thin) / Polygon (thick)
   renderSvg  :: Picture -> Html                        -- SVG interpreter (d3x/hsx)
-  --  renderCanvas :: Picture -> Canvas ()             -- future: blank-canvas interpreter
+  --  renderCanvas :: Picture -> Canvas ()             -- future: blank-canvas interpreter 
+
+
+
+Starts a terminal ui and an interactive viewer at localhost:9090 in your browser:
+
+```bash
+    cabal run xbs-live -- ../examples/rings.bs
+```
