@@ -17,6 +17,8 @@ import ParseXBS (loadBs, parseMv)
 import Types
 import qualified Tui
 
+import           Linear                  (V3(..))
+import qualified Data.Map               as M
 import qualified Data.Vector            as V
 import qualified Data.Text              as T
 import           Data.Text              (Text)
@@ -32,7 +34,7 @@ import           Control.Monad           (join)
 import           Control.Monad.IO.Class  (liftIO)
 import           System.Environment      (getArgs)
 import           System.FilePath         (replaceExtension, takeFileName)
-import           System.Directory        (doesFileExist)
+import           System.Directory        (doesFileExist, doesDirectoryExist)
 import           Text.Read               (readMaybe)
 
 import           Control.Monad.CC.CCRef  -- multi-prompt delimited control (Oleg's reference impl)
@@ -105,9 +107,21 @@ statusOf scene cfg natoms focus = Status
 dragSens :: Double
 dragSens = 0.01
 
+-- | An empty scene for when the user points at a directory instead of a .bs file.
+--   The TUI explorer is still navigable; the user can pick a .bs to load.
+emptyScene :: FilePath -> (Scene, Config)
+emptyScene path =
+  let eye = V3 (V3 1 0 0) (V3 0 1 0) (V3 0 0 1)
+      cfg = Config { bline = False, wire = False, perspective = False
+                   , dist0 = 0, scale = 1, zoom = 1, frame = 0, tmat = eye }
+      scene = Scene { sceneFile = path, home = eye, bondMap = M.empty
+                    , balls = [], movie = V.empty, nframes = 1 }
+  in (scene, cfg)
+
 runLive :: FilePath -> IO ()
 runLive path = do
-  (scene, cfg0) <- buildScene path
+  isDir <- doesDirectoryExist path
+  (scene, cfg0) <- if isDir then pure (emptyScene path) else buildScene path
   htmxJs' <- readAsset "static/htmx.min.js"       -- served at /htmx.min.js
 
   tvar    <- newTVarIO ("" :: Text)

@@ -71,7 +71,8 @@ data TEvent = Redraw
 -- | Launch the TUI. brick owns the main thread + vty; returning ends the process.
 run :: App -> FilePath -> IO ()
 run app startPath = do
-  startDir <- canonicalizePath (takeDirectory startPath)
+  isDir <- doesDirectoryExist startPath
+  startDir <- canonicalizePath (if isDir then startPath else takeDirectory startPath)
   entries  <- listDir startDir
   status0  <- readTVarIO app.statusTV
   pic0     <- readTVarIO app.pictureTV

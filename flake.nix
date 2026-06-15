@@ -17,7 +17,7 @@
     # OCaml interface) for xbs-live's input loop. Built from the local checkout
     # (repo: Montmorency/CCRef); we ship this ourselves rather than depend on
     # nixpkgs' broken CC-delcont.
-        oleg-delimcc.url = "github:Montmorency/d3x";
+        oleg-delimcc.url = "github:Montmorency/CCRef";
   };
 
   outputs =
@@ -121,6 +121,9 @@
               cp xbs.js README.md deno.json $out/lib/xbs-js/
             '';
           };
+
+          # xbs-live: install system-wide with `nix profile install .#xbs-live`
+          xbs-live = pkgs.haskell.lib.justStaticExecutables pkgs.haskellPackages.xbs-hs;
 
           default = self.packages.${system}.xbs-c;
         }

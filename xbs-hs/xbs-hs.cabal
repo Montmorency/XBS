@@ -91,6 +91,7 @@ executable xbs-live
           base >= 4.17.0 && < 4.22
         , xbs-hs
         , oleg-delimcc
+        , linear
         , brick >= 2.1
         , mtl
         , microlens

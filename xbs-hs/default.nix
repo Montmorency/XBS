@@ -18,7 +18,7 @@ mkDerivation {
   ];
   executableHaskellDepends = [
     base brick bytestring containers oleg-delimcc d3x directory filepath http-types ihp-hsx
-    microlens mtl stm text vector vty vty-crossplatform wai warp
+    linear microlens mtl stm text vector vty vty-crossplatform wai warp
   ];
   testHaskellDepends = [ base containers hspec linear text ];
   doCheck = false;   # tests read ../examples (not in the nix src); run via `cabal test`
