@@ -101,7 +101,8 @@ statusOf scene cfg natoms focus = Status
   { sFile = takeFileName scene.sceneFile, sNatoms = natoms
   , sFrame = cfg.frame, sNframes = scene.nframes
   , sZoom = cfg.zoom, sPersp = cfg.perspective
-  , sBline = cfg.bline, sWire = cfg.wire, sFocus = focus }
+  , sBline = cfg.bline, sWire = cfg.wire
+  , sLabels = cfg.labels, sFocus = focus }
 
 -- | Pointer-drag rotation sensitivity (radians per pixel).
 dragSens :: Double
@@ -113,7 +114,8 @@ emptyScene :: FilePath -> (Scene, Config)
 emptyScene path =
   let eye = V3 (V3 1 0 0) (V3 0 1 0) (V3 0 0 1)
       cfg = Config { bline = False, wire = False, perspective = False
-                   , dist0 = 0, scale = 1, zoom = 1, frame = 0, tmat = eye }
+                   , dist0 = 0, scale = 1, zoom = 1, frame = 0
+                   , labels = LabelsOff, tmat = eye }
       scene = Scene { sceneFile = path, home = eye, bondMap = M.empty
                     , balls = [], movie = V.empty, nframes = 1 }
   in (scene, cfg)
@@ -277,6 +279,7 @@ tokenToCmd t = case t of
   "persp"     -> Just TogglePersp
   "line"      -> Just ToggleLine
   "wire"      -> Just ToggleWire
+  "labels"    -> Just ToggleLabels
   "reset"     -> Just ResetView
   "frameprev" -> Just FramePrev   ; "framenext"  -> Just FrameNext
   "framefirst"-> Just FrameFirst  ; "framelast"  -> Just FrameLast
@@ -344,8 +347,8 @@ pageHtml = LBS.fromStrict $ TE.encodeUtf8 $ T.concat
     , "body{display:flex}"
     , "#data{width:300px;flex:0 0 300px;overflow:auto;padding:12px;"
     ,       "border-right:1px solid #eee;box-sizing:border-box}"
-    , "#view{flex:1;display:flex;align-items:center;justify-content:center;background:#fff}"
-    , "#view svg{max-width:100%;max-height:100vh}"
+    , "#view{flex:1;display:flex;align-items:center;justify-content:center;background:#fff;height:100vh;overflow:hidden}"
+    , "#view svg{width:100%;height:100%}"
     , "</style>"
     , "<script src=\"/htmx.min.js\"></script>"
     , "</head><body>"
@@ -358,8 +361,8 @@ pageHtml = LBS.fromStrict $ TE.encodeUtf8 $ T.concat
     , "function send(q){fetch('/cmd?'+q);}"
     -- keystroke parity with the terminal (same keys drive the shared Config)
     , "var km={ArrowLeft:'rotl',ArrowRight:'rotr',ArrowUp:'rotu',ArrowDown:'rotd',"
-    ,   "'<':'rotccw','>':'rotcw',p:'persp',l:'line',w:'wire',r:'reset',"
-    ,   "'[':'frameprev',']':'framenext',j:'framefirst',k:'framelast',"
+    ,   "'<':'rotccw','>':'rotcw',p:'persp',l:'line',w:'wire',n:'labels',r:'reset',"
+    ,   "'[':'frameprev',']':'framenext',j:'frameprev',k:'framenext',"
     ,   "'+':'zoomin','=':'zoomin','-':'zoomout'};"
     , "addEventListener('keydown',function(e){var c=km[e.key];if(c){send('c='+c);e.preventDefault();}});"
     -- trackpad / wheel → zoom

@@ -20,7 +20,7 @@ module Tui (run) where
 
 import Types
 import XBS                                    (Picture)
-import Braille                                (renderBraille)
+import Braille                                (renderBraille, ColorMode(..), unpackRGB)
 
 import qualified Brick                       as B
 import qualified Brick.BChan                 as B
@@ -29,8 +29,9 @@ import qualified Brick.Widgets.Border.Style  as BS
 import qualified Brick.Widgets.List          as B
 import           Brick.Util                  (on)
 import           Lens.Micro                  ((^.))
-import qualified Graphics.Vty                as V
+import qualified Graphics.Vty                as Vty
 
+import qualified Data.Vector                 as V
 import qualified Data.Sequence               as Seq
 import           Data.Sequence               (Seq)
 import           Data.List                   (sortOn)
@@ -57,11 +58,12 @@ type FileList = B.GenericList TName Seq Entry
 --   cursor, the focus, and a snapshot of the shared 'Status'/'Picture' (refreshed
 --   on each 'Redraw') that the controller and preview panes draw from.
 data TState = TState
-  { tsCwd     :: FilePath
-  , tsList    :: FileList
-  , tsFocus   :: TName
-  , tsStatus  :: Status
-  , tsPicture :: Picture
+  { tsCwd       :: FilePath
+  , tsList      :: FileList
+  , tsFocus     :: TName
+  , tsStatus    :: Status
+  , tsPicture   :: Picture
+  , tsColorMode :: ColorMode
   }
 
 -- | Custom brick event: the driver re-rendered (rotation, zoom, frame, load, or a
@@ -77,11 +79,12 @@ run app startPath = do
   status0  <- readTVarIO app.statusTV
   pic0     <- readTVarIO app.pictureTV
   let ts0 = TState { tsCwd = startDir, tsList = mkList entries
-                   , tsFocus = Explorer, tsStatus = status0, tsPicture = pic0 }
+                   , tsFocus = Explorer, tsStatus = status0, tsPicture = pic0
+                   , tsColorMode = NoColor }
   chan <- B.newBChan 16
   _ <- forkIO (watch app chan)
   (_, vty) <- B.customMainWithDefaultVty (Just chan) (theApp app) ts0
-  V.shutdown vty
+  Vty.shutdown vty
 
 -- | Wake the TUI on every render. STM @retry@ blocks on the driver's tick counter
 --   so we repaint for *visual* changes (rotation, zoom, …) — not just 'Status'
@@ -108,9 +111,9 @@ theApp app = B.App
   }
 
 theMap :: B.AttrMap
-theMap = B.attrMap V.defAttr
-  [ (B.listSelectedFocusedAttr, V.black `on` V.cyan)
-  , (B.listSelectedAttr,        V.defAttr `V.withStyle` V.dim)
+theMap = B.attrMap Vty.defAttr
+  [ (B.listSelectedFocusedAttr, Vty.black `on` Vty.cyan)
+  , (B.listSelectedAttr,        Vty.defAttr `Vty.withStyle` Vty.dim)
   ]
 
 ------------------------------------------------------------------------
@@ -131,17 +134,23 @@ rightPane :: TState -> B.Widget TName
 rightPane ts =
   B.vBox [ controllerW ts
          , B.hBorderWithLabel (B.str " preview ")
-         , previewW ts.tsPicture ]
+         , previewW ts.tsColorMode ts.tsPicture ]
 
 -- | Size-aware braille preview: rasterizes the current 'Picture' to fill whatever
 --   space brick allots this pane, reflowing on resize. The molecule reflows live
---   as the controller rotates/zooms it.
-previewW :: Picture -> B.Widget TName
-previewW pic = B.Widget B.Greedy B.Greedy $ do
+--   as the controller rotates/zooms it. In colour modes, each braille glyph gets
+--   a vty foreground attribute via 'Vty.rgbColor' (24-bit true colour).
+previewW :: ColorMode -> Picture -> B.Widget TName
+previewW cm pic = B.Widget B.Greedy B.Greedy $ do
   ctx <- B.getContext
   let cols = ctx ^. B.availWidthL
       rows = ctx ^. B.availHeightL
-  B.render (B.vBox (map B.txt (renderBraille cols rows pic)))
+      charRows = renderBraille cm cols rows pic
+      rowImg row = Vty.horizCat [ charImg ch c | (ch, c) <- row ]
+      charImg ch 0 = Vty.char Vty.defAttr ch
+      charImg ch c = let (r, g, b) = unpackRGB c
+                     in Vty.char (Vty.defAttr `Vty.withForeColor` Vty.rgbColor r g b) ch
+  B.render (B.raw (Vty.vertCat (map rowImg charRows)))
 
 -- | A bordered column; the focused one gets a bold border so it's obvious which
 --   column the arrow keys are driving.
@@ -162,14 +171,17 @@ controllerW ts = B.vBox $ map B.str
   , "frame:  " <> frameLine s
   , "zoom:   " <> showZoom s.sZoom
   , "render: persp " <> onoff s.sPersp <> " · line " <> onoff s.sBline
-                     <> " · wire " <> onoff s.sWire
+                     <> " · wire " <> onoff s.sWire <> " · labels " <> showLab s.sLabels
+  , "color:  " <> showCM ts.tsColorMode
   , "focus:  " <> if null s.sFocus then "-" else show s.sFocus
   , ""
   , "── controls (this column) ──"
   , "  ← → ↑ ↓   rotate"
   , "  + / -     zoom"
-  , "  p l w r   persp · line · wire · reset"
-  , "  [ ] j k   frames"
+  , "  p l w n r persp · line · wire · labels · reset"
+  , "  c           braille color (off/gray/color)"
+  , "  f / F     focus next atom / multi-toggle"
+  , "  [ ] / j k  prev/next frame"
   , ""
   , "── tui ──"
   , "  Tab / S-Tab     switch column"
@@ -179,6 +191,12 @@ controllerW ts = B.vBox $ map B.str
   where
     s = ts.tsStatus
     onoff b = if b then "on" else "off"
+    showCM NoColor   = "off"
+    showCM GrayScale = "gray"
+    showCM FullColor = "color"
+    showLab LabelsOff     = "off"
+    showLab LabelsIndex   = "idx"
+    showLab LabelsSpecies = "species"
     frameLine st | st.sNframes > 1 = show (st.sFrame + 1) <> "/" <> show st.sNframes
                  | otherwise       = "(static)"
     showZoom z = show (fromIntegral (round (z * 100) :: Int) / 100 :: Double)
@@ -195,36 +213,67 @@ handleEvent app ev = do
       s <- liftIO (readTVarIO app.statusTV)
       p <- liftIO (readTVarIO app.pictureTV)
       put ts { tsStatus = s, tsPicture = p }
-    B.VtyEvent (V.EvKey k mods) -> handleKey app ts k mods
+    B.VtyEvent (Vty.EvKey k mods) -> handleKey app ts k mods
     _                           -> pure ()
 
-handleKey :: App -> TState -> V.Key -> [V.Modifier] -> B.EventM TName TState ()
+handleKey :: App -> TState -> Vty.Key -> [Vty.Modifier] -> B.EventM TName TState ()
 handleKey app ts k mods
-  | k `elem` [V.KChar 'q', V.KEsc]                      = B.halt
-  | k == V.KChar '\t' || k == V.KBackTab               = put ts { tsFocus = other ts.tsFocus }
-  | isMeta && k `elem` [V.KChar 'h', V.KChar 'l']      = put ts { tsFocus = other ts.tsFocus }
+  | k `elem` [Vty.KChar 'q', Vty.KEsc]                      = B.halt
+  | k == Vty.KChar '\t' || k == Vty.KBackTab               = put ts { tsFocus = other ts.tsFocus }
+  | isMeta && k `elem` [Vty.KChar 'h', Vty.KChar 'l']      = put ts { tsFocus = other ts.tsFocus }
   | otherwise = case ts.tsFocus of
-      Controller -> liftIO (atomically (writeTChan app.cmdQ (Act (evToCmd (V.EvKey k mods)))))
+      Controller -> controllerKey app ts k mods
       Explorer   -> explorerKey app ts k
   where
     -- NB no M-[ / M-]: with iTerm "Esc+", Option-[ sends `ESC [` = the CSI escape
     -- introducer, which vty buffers then flushes as a stray KEsc (→ quit). M-h/M-l
     -- (and Tab/BackTab) avoid the escape-sequence space entirely.
-    isMeta = V.MMeta `elem` mods
+    isMeta = Vty.MMeta `elem` mods
     other Explorer   = Controller
     other Controller = Explorer
 
-explorerKey :: App -> TState -> V.Key -> B.EventM TName TState ()
+-- | Controller pane keys: 'f' cycles single-atom focus forward (like clicking
+--   each atom in turn); 'F' (shift) toggles the next atom into/out of the
+--   multi-select stack (like shift-click). Everything else falls through to
+--   'evToCmd' for rotation/zoom/frame/toggle commands.
+controllerKey :: App -> TState -> Vty.Key -> [Vty.Modifier] -> B.EventM TName TState ()
+controllerKey app ts k mods = case k of
+    Vty.KChar 'f' | Vty.MShift `notElem` mods -> liftIO (cycleFocus app False)
+    Vty.KChar 'F'                            -> liftIO (cycleFocus app True)
+    Vty.KChar 'c'                            -> put ts { tsColorMode = nextCM ts.tsColorMode }
+    _ -> liftIO (atomically (writeTChan app.cmdQ (Act (evToCmd (Vty.EvKey k mods)))))
+  where nextCM FullColor = NoColor
+        nextCM m         = succ m
+
+-- | Advance the focus cursor to the next atom. Plain = replace (single select);
+--   multi = toggle into/out of the stack (shift-click semantics). Wraps around;
+--   one past the last atom clears the selection.
+cycleFocus :: App -> Bool -> IO ()
+cycleFocus app multi = atomically $ do
+    natoms <- V.length <$> readTVar app.ballsTV
+    if natoms == 0 then pure () else do
+      cur <- readTVar app.focusTV
+      let next = case cur of []    -> 0
+                             (c:_) -> c + 1
+          nf | next >= natoms = if multi then cur else []   -- wrap: clear (single) or stay (multi)
+             | multi          = if next `elem` cur
+                                  then filter (/= next) cur
+                                  else next : cur
+             | otherwise      = [next]
+      writeTVar app.focusTV nf
+      writeTChan app.cmdQ Refocus
+
+explorerKey :: App -> TState -> Vty.Key -> B.EventM TName TState ()
 explorerKey app ts = \case
-    V.KUp        -> moveSel B.listMoveUp
-    V.KChar 'k'  -> moveSel B.listMoveUp
-    V.KDown      -> moveSel B.listMoveDown
-    V.KChar 'j'  -> moveSel B.listMoveDown
-    V.KEnter     -> activate
-    V.KRight     -> activate
-    V.KChar 'l'  -> activate
-    V.KLeft      -> ascend
-    V.KChar 'h'  -> ascend
+    Vty.KUp        -> moveSel B.listMoveUp
+    Vty.KChar 'k'  -> moveSel B.listMoveUp
+    Vty.KDown      -> moveSel B.listMoveDown
+    Vty.KChar 'j'  -> moveSel B.listMoveDown
+    Vty.KEnter     -> activate
+    Vty.KRight     -> activate
+    Vty.KChar 'l'  -> activate
+    Vty.KLeft      -> ascend
+    Vty.KChar 'h'  -> ascend
     _            -> pure ()
   where
     moveSel f = put ts { tsList = f ts.tsList }

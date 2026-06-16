@@ -12,68 +12,161 @@
 --   Each glyph (@U+2800 + mask@) packs a 2×4 dot grid → 2×4 sub-cell resolution;
 --   braille dots are ~square in a normal terminal cell, so a single uniform
 --   fit-scale keeps atoms round (cf. 'XBS.viewportScale'). The dot bitmap is one
---   unboxed @Vector Bool@ (build O(dots+strokes), packing O(dots)); rows are
+--   unboxed @Vector Word32@ (build O(dots+strokes), packing O(dots)); rows are
 --   independent and yielded lazily, so output is ready to stream a row at a time.
-module Braille (renderBraille) where
+--
+--   Colour: each dot carries a packed RGB from its source prim. The z-sorted
+--   back-to-front ordering means last-write-wins gives the frontmost atom's colour.
+--   Per braille cell, the dominant colour is picked and returned alongside the
+--   glyph character; the TUI builds vty Images with proper Attr colours from these.
+module Braille (renderBraille, ColorMode(..), unpackRGB) where
 
 import XBS (Picture(..), Prim(..), pictureExtent)
 
-import           Data.Text             (Text)
 import qualified Data.Text             as T
 import qualified Data.Map.Strict       as Map
 import qualified Data.Vector.Unboxed   as VU
+import           Data.Word             (Word32)
+import           Data.Bits             (shiftL, shiftR, (.&.), (.|.))
+import           Data.List             (group, sortOn, maximumBy)
+import           Data.Ord              (comparing, Down(..))
 import           Linear                (V2(..))
 import           D3X.Scales            (Domain(..))
+import           Text.Read             (readMaybe)
 
--- | Rasterize a 'Picture' to braille, one 'Text' per character row.
---   @cols@×@rows@ are the character-cell dimensions of the target pane.
-renderBraille :: Int -> Int -> Picture -> [Text]
-renderBraille cols rows pic
+-- | Braille colour mode, cycled by @c@ in the TUI controller.
+data ColorMode = NoColor | GrayScale | FullColor
+  deriving (Eq, Show, Enum, Bounded)
+
+------------------------------------------------------------------------
+-- Packed colour helpers
+------------------------------------------------------------------------
+
+-- | Pack RGB (0–255 each) into a Word32 with bit 24 set as on-flag.
+--   0 is reserved for "dot off" so even black (0,0,0) becomes 0x01000000.
+packColor :: Int -> Int -> Int -> Word32
+packColor r g b = 0x01000000
+  .|. (fromIntegral (clamp r) `shiftL` 16)
+  .|. (fromIntegral (clamp g) `shiftL` 8)
+  .|.  fromIntegral (clamp b)
+  where clamp x = max 0 (min 255 x)
+
+-- | Unpack a packed colour to (R, G, B) 0–255.
+unpackRGB :: Word32 -> (Int, Int, Int)
+unpackRGB w = ( fromIntegral ((w `shiftR` 16) .&. 0xFF)
+              , fromIntegral ((w `shiftR` 8)  .&. 0xFF)
+              , fromIntegral  (w              .&. 0xFF) )
+
+-- | Parse our own @rgbToCss@ output (@"rgb(R,G,B)"@) back to a packed colour.
+--   Falls back to light gray for @"none"@ (wireframe) or any unexpected format.
+parseCssColor :: T.Text -> Word32
+parseCssColor t = case T.stripPrefix "rgb(" t >>= T.stripSuffix ")" of
+    Just inner -> case mapM (readMaybe . T.unpack . T.strip) (T.splitOn "," inner) of
+        Just [r, g, b] -> packColor r g b
+        _              -> fallback
+    Nothing            -> fallback
+  where fallback = packColor 180 180 180  -- light gray for wireframe / unknown
+
+------------------------------------------------------------------------
+-- Rendering
+------------------------------------------------------------------------
+
+-- | Rasterize a 'Picture' to braille, returning rows of @(Char, Word32)@ pairs.
+--   The Word32 is 0 for 'NoColor' mode, or a packed RGB (with on-flag in bit 24,
+--   already grayscale-adjusted for 'GrayScale') that the caller can map to vty
+--   attributes. @cols@×@rows@ are the character-cell dimensions of the target pane.
+renderBraille :: ColorMode -> Int -> Int -> Picture -> [[(Char, Word32)]]
+renderBraille colorMode cols rows pic
   | cols < 1 || rows < 1 = []
-  | otherwise            = [ packRow cy | cy <- [0 .. rows-1] ]
+  | otherwise             = [ packRow cy | cy <- [0 .. rows-1] ]
   where
     dotW = 2*cols ; dotH = 4*rows
-    grid :: VU.Vector Bool
-    grid = VU.accum (\_ b -> b) (VU.replicate (dotW*dotH) False)
-             [ (y*dotW + x, b)
-             | (x,y,b) <- rasterUpdates dotW dotH pic
-             , x >= 0, x < dotW, y >= 0, y < dotH ]
-    on x y = grid `VU.unsafeIndex` (y*dotW + x)
-    packRow cy = T.pack [ glyph cx cy | cx <- [0 .. cols-1] ]
-    glyph cx cy = toEnum (0x2800 + mask) :: Char
-      where bx = 2*cx ; by = 4*cy
-            mask = bit  bx     by    0x01 + bit  bx    (by+1) 0x02
-                 + bit  bx    (by+2) 0x04 + bit  bx    (by+3) 0x40
-                 + bit (bx+1)  by    0x08 + bit (bx+1)(by+1) 0x10
-                 + bit (bx+1) (by+2) 0x20 + bit (bx+1)(by+3) 0x80
-            bit x y v = if on x y then v else (0 :: Int)
 
--- | Per-prim raster updates in Picture order (already z-sorted, back to front), as
---   @(x, y, on?)@ so 'renderBraille' can apply them last-write-wins and let front
---   atoms occlude what's behind. A solid atom first clears a one-dot-wider disc
---   (the "moat": occludes back geometry AND leaves a separating ring) then fills.
---   Hollow atoms (fill @"none"@ = wireframe) stay outlines and thin bonds stay
---   strokes, so the SVG's @w@ (wire) and @l@ (line) toggles carry through unchanged.
-rasterUpdates :: Int -> Int -> Picture -> [(Int,Int,Bool)]
+    -- Each dot is 0 (off) or a packed RGB with on-flag (nonzero).
+    -- Back-to-front prim order + last-write-wins gives correct z-occlusion.
+    grid :: VU.Vector Word32
+    grid = VU.accum (\_ c -> c) (VU.replicate (dotW*dotH) 0)
+             [ (y*dotW + x, c)
+             | (x, y, c) <- rasterUpdates dotW dotH pic
+             , x >= 0, x < dotW, y >= 0, y < dotH ]
+
+    at x y = grid `VU.unsafeIndex` (y*dotW + x)
+
+    packRow cy = [ cell cx cy | cx <- [0 .. cols-1] ]
+
+    cell cx cy =
+      let bx = 2*cx ; by = 4*cy
+          -- Braille dot mask (same encoding as before)
+          mask = bit  bx     by    0x01 + bit  bx    (by+1) 0x02
+               + bit  bx    (by+2) 0x04 + bit  bx    (by+3) 0x40
+               + bit (bx+1)  by    0x08 + bit (bx+1) (by+1) 0x10
+               + bit (bx+1) (by+2) 0x20 + bit (bx+1) (by+3) 0x80
+          bit x y v = if at x y /= 0 then v else (0 :: Int)
+          ch = toEnum (0x2800 + mask) :: Char
+          col = case colorMode of
+                  NoColor -> 0
+                  _       -> cellColor colorMode bx by
+      in (ch, col)
+
+    -- Pick the dominant colour from the 8 dots in this 2×4 cell.
+    -- Applies grayscale conversion here so the caller just sees final RGB.
+    cellColor mode bx by =
+      let dots = [ at (bx+dx) (by+dy)
+                 | dy <- [0..3], dx <- [0..1]
+                 , at (bx+dx) (by+dy) /= 0 ]
+      in case dots of
+           [] -> 0
+           _  -> let dominant = mostCommon dots
+                     (r, g, b) = unpackRGB dominant
+                 in case mode of
+                      FullColor -> dominant
+                      _         -> let l = lumin r g b in packColor l l l
+
+-- | ITU-R BT.601 luminance (the standard RGB→gray conversion).
+lumin :: Int -> Int -> Int -> Int
+lumin r g b = round (0.299 * fromIntegral r + 0.587 * fromIntegral g
+                                            + 0.114 * fromIntegral b :: Double)
+
+-- | Most frequent element in a non-empty list.
+mostCommon :: [Word32] -> Word32
+mostCommon xs = case maximumBy (comparing length) (group (sortOn Down xs)) of
+                  (c:_) -> c
+                  []    -> 0  -- unreachable: group produces non-empty sublists
+
+------------------------------------------------------------------------
+-- Raster updates (with colour)
+------------------------------------------------------------------------
+
+-- | Per-prim raster updates in Picture order (already z-sorted, back to front).
+--   Each update is @(x, y, packedColor)@ where 0 = clear (moat) and nonzero =
+--   dot-on with the prim's colour. Last-write-wins in 'VU.accum' gives correct
+--   z-occlusion: a solid atom first clears a one-dot-wider disc (the "moat":
+--   occludes back geometry AND leaves a separating ring) then fills with colour.
+rasterUpdates :: Int -> Int -> Picture -> [(Int, Int, Word32)]
 rasterUpdates dotW dotH pic@(Picture prims) = concatMap draw prims
   where
     (sc, cx0, cy0) = fitScale dotW dotH pic
     mx = fromIntegral dotW / 2 ; my = fromIntegral dotH / 2
     rx x = round (mx + sc*(x - cx0)) :: Int
     ry y = round (my - sc*(y - cy0)) :: Int     -- flip y (screen points down)
-    paint b = map (\(x,y) -> (x, y, b))
+    paint c = map (\(x,y) -> (x, y, c))
     draw (Disc _ cx cy r fill)
-      | fill == "none" = paint True (circlePts cX cY rr)             -- wireframe: outline
-      | otherwise      = paint False (disk cX cY (rr+1))             -- moat: occlude + ring
-                      ++ paint True  (disk cX cY rr)                 -- solid ball
+      | fill == "none" = paint (parseCssColor "none") (circlePts cX cY rr)  -- wireframe outline
+      | otherwise      = paint 0             (disk cX cY (rr+1))            -- moat: clear
+                      ++ paint (parseCssColor fill) (disk cX cY rr)         -- solid ball
       where cX = rx cx ; cY = ry cy ; rr = max 1 (round (sc*r))
-    draw (Polyline ps _)   = paint True (stroke ps)                  -- thin bond
+    draw (Polyline ps col)  = paint (parseCssColor col) (stroke ps)         -- thin bond
     draw (Polygon  ps fill)
-      | fill == "none" = paint True (stroke (close ps))              -- outline
-      | otherwise      = paint True (fillSpans (stroke (close ps)))  -- solid bond
+      | fill == "none" = paint (parseCssColor "none") (stroke (close ps))   -- outline
+      | otherwise      = paint (parseCssColor fill)   (fillSpans (stroke (close ps)))
+    draw (Label _ _ _) = []
     close ps  = ps ++ take 1 ps
     stroke ps = concat (zipWith seg ps (drop 1 ps))
     seg (V2 x0 y0) (V2 x1 y1) = bresenham (rx x0, ry y0) (rx x1, ry y1)
+
+------------------------------------------------------------------------
+-- Geometry (unchanged)
+------------------------------------------------------------------------
 
 -- | A filled disc: the midpoint-circle boundary, then fill each scanline between its
 --   extremes (the convex case of METAFONT's per-row edge fill, mf.web ch.20/22).

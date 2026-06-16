@@ -42,6 +42,15 @@ type Perspective = Bool
 type Vec3 = V3 Double          -- a 3-vector of coordinates
 type Mat3 = M33 Double         -- = V3 (V3 Double), a 3x3 transform matrix
 
+-- | What to show next to each atom (C @numbers@ variable: 0/1/2, cycled by @n@).
+data Labels = LabelsOff | LabelsIndex | LabelsSpecies
+  deriving (Eq, Show, Enum, Bounded)
+
+-- | Cycle to the next label mode (wraps around).
+nextLabels :: Labels -> Labels
+nextLabels LabelsSpecies = LabelsOff
+nextLabels l             = succ l
+
 data Config = Config { bline :: Bool
                      , wire :: Bool                 -- wireframe: atoms hollow (fill none), bonds only
                      , perspective :: Perspective   -- render mode (C pmode); toggled live
@@ -49,6 +58,7 @@ data Config = Config { bline :: Bool
                      , scale :: Float
                      , zoom :: Double               -- interactive zoom multiplier (1 = fit-to-view)
                      , frame :: Int                 -- movie frame index (0 when static / no .mv)
+                     , labels :: Labels             -- atom label mode (n key; C numbers 0/1/2)
                      , tmat :: Mat3
                      }
 
@@ -101,6 +111,7 @@ data Bond = Bond { sp1       :: SpeciesName
 data Prim = Disc     Int Double Double Double Text  -- ^ atomIdx cx cy r fill (atom; idx for selection)
           | Polyline [V2 Double] Text               -- ^ pts      stroke (thin bond)
           | Polygon  [V2 Double] Text               -- ^ pts      fill   (thick bond)
+          | Label    Double Double Text              -- ^ cx cy text (atom label, rendered above disc)
           deriving (Eq, Show)
 
 newtype Picture = Picture [Prim]
@@ -113,6 +124,7 @@ defConfig = Config { bline = False   -- C default (pmode): thick cylinders, not 
                    , scale = 15
                    , zoom = 1.0
                    , frame = 0
+                   , labels = LabelsOff
                    }
 -- XBS constants: these should get plugged into config for interaction (versor drag or terminal connection)
 -- kitty render?
@@ -192,7 +204,7 @@ drawBallAndSticks :: Config -> Mat3 -> (Ball, [Stick]) -> Picture
 drawBallAndSticks config tmat (ball, sticks) =
     -- bonds first, then the atom on top: the atom covers its own near-caps,
     -- while the bond shafts (outside the atom radius) stay visible.
-    foldMap drawOneBond sortedSticks <> plotAtom config.wire config.perspective (rot ball)
+    foldMap drawOneBond sortedSticks <> plotAtom config (rot ball)
   where
     rot b        = b { pos = tmat !* b.pos }              -- ball into view space
     rotStick stk = stk { end = rot stk.end }              -- only .end is used downstream
@@ -291,14 +303,21 @@ stick bondMap (ball1 : balls) = (ball1, catMaybes (map (\ball2 -> case M.lookup 
 drawScene :: Config -> Mat3 -> V.Vector (Ball, [Stick]) -> Picture
 drawScene config tmat = foldMap (drawBallAndSticks config tmat) . sortByZ tmat
 
--- | One atom as a Disc primitive (ball is expected already in view space).
---   In wireframe mode the disc is hollow (fill "none") so only its outline and
---   the bonds show — mirrors the JS `wire_fill` (atom fill = none when wire).
-plotAtom :: Bool -> Perspective -> Ball -> Picture
-plotAtom wire persp ball =
-  let V3 px py pr = atomPos persp ball.pos ball.rad   -- paper x,y + projected radius
-      fill = if wire then "none" else rgbToCss ball.rgb
-  in Picture [Disc ball.idx (px + taux) (py + tauy) pr fill]
+-- | One atom as a Disc primitive (+ optional label). Ball is expected already in
+--   view space. In wireframe mode the disc is hollow (fill "none") so only its
+--   outline and the bonds show — mirrors the JS `wire_fill` (atom fill = none
+--   when wire). Label mode mirrors C @numbers@ (n key): index or species name,
+--   placed just above the atom centre (C: @zp[k][1]+tauy-2@).
+plotAtom :: Config -> Ball -> Picture
+plotAtom cfg ball =
+  let V3 px py pr = atomPos cfg.perspective ball.pos ball.rad
+      fill = if cfg.wire then "none" else rgbToCss ball.rgb
+      disc = Picture [Disc ball.idx (px + taux) (py + tauy) pr fill]
+      lab  = case cfg.labels of
+               LabelsOff     -> mempty
+               LabelsIndex   -> Picture [Label (px + taux) (py + tauy) (tshow ball.idx)]
+               LabelsSpecies -> Picture [Label (px + taux) (py + tauy) ball.species]
+  in disc <> lab
 
 -- A 2D viewport transform: maps x, y and a length/radius (each Double->Double).
 -- Local for now; may promote to a d3x multi-dimensional scale type later, driven
@@ -338,6 +357,7 @@ pictureExtent (Picture prims) = case concatMap coords prims of
     coords (Disc _ cx cy r _) = [V2 (cx-r) (cy-r), V2 (cx+r) (cy+r)]  -- include the disc, not just its centre
     coords (Polyline p _)   = p
     coords (Polygon  p _)   = p
+    coords (Label _ _ _)    = []    -- labels float above their atom; don't expand extent
 
 -- | SVG interpreter (d3x/hsx). Other backends (blank-canvas, eps, …) are just
 --   more interpreters over the same Picture.
@@ -356,6 +376,9 @@ renderWith disc zoom pic@(Picture prims) = foldMap prim prims
     prim (Disc i cx cy r fill) = disc i (sx cx) (sy cy) (sr r) fill
     prim (Polyline pts stroke) = [hsx|<path d={d3Line (map pt pts)} fill="none" stroke={stroke}/>|]
     prim (Polygon  pts fill)   = [hsx|<path d={d3Line (map pt pts) <> "Z"} fill={fill} stroke="black"/>|]
+    prim (Label cx cy txt)     =
+      let lx = tshow (sx cx) ; ly = tshow (sy cy - 2)  -- nudge above centre (C: tauy-2)
+      in [hsx|<text x={lx} y={ly} text-anchor="middle" font-size="10" font-family="sans-serif" fill="black">{txt}</text>|]
 
 -- | Static interpreter (xbs-render): plain circles, no interaction markup.
 renderSvg :: Picture -> Html
@@ -402,6 +425,7 @@ rotmat ixyz alfa t = case ixyz of
 -- | A view/render command from the interactive driver.
 data Cmd = RotL | RotR | RotU | RotD | RotCCW | RotCW   -- arrows / ' / / / < / >
          | TogglePersp | ToggleLine | ToggleWire         -- p / l / w
+         | ToggleLabels                                   -- n (cycle: off → index → species)
          | ZoomIn | ZoomOut                               -- + (=) / -
          | ResetView                                      -- r
          | FramePrev | FrameNext | FrameFirst | FrameLast -- [ ] j k
@@ -426,6 +450,7 @@ applyCmd home nframes cmd cfg = case cmd of
     TogglePersp -> cfg { perspective = not cfg.perspective }
     ToggleLine  -> cfg { bline = not cfg.bline }
     ToggleWire  -> cfg { wire  = not cfg.wire }
+    ToggleLabels-> cfg { labels = nextLabels cfg.labels }
     ZoomIn      -> cfg { zoom = cfg.zoom * zoomStep }
     ZoomOut     -> cfg { zoom = cfg.zoom / zoomStep }
     ResetView   -> cfg { tmat = home, zoom = 1.0 }

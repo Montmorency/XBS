@@ -8,10 +8,11 @@ module Types
   ( Input(..)
   , App(..)
   , Status(..)
+  , Labels(..)
   , evToCmd
   ) where
 
-import XBS (Cmd(..), Ball, Picture)
+import XBS (Cmd(..), Labels(..), Ball, Picture)
 
 import           Data.Text               (Text)
 import qualified Data.Vector             as V
@@ -54,6 +55,7 @@ data Status = Status
   , sPersp   :: Bool
   , sBline   :: Bool
   , sWire    :: Bool
+  , sLabels  :: Labels
   , sFocus   :: [Int]
   }
   deriving (Eq)
@@ -73,6 +75,7 @@ evToCmd (Vty.EvKey k _) = case k of
     Vty.KChar 'p'  -> TogglePersp
     Vty.KChar 'l'  -> ToggleLine
     Vty.KChar 'w'  -> ToggleWire
+    Vty.KChar 'n'  -> ToggleLabels
     Vty.KChar '+'  -> ZoomIn
     Vty.KChar '='  -> ZoomIn            -- unshifted '+' key
     Vty.KChar '-'  -> ZoomOut
@@ -80,7 +83,7 @@ evToCmd (Vty.EvKey k _) = case k of
     Vty.KChar 'r'  -> ResetView
     Vty.KChar '['  -> FramePrev
     Vty.KChar ']'  -> FrameNext
-    Vty.KChar 'j'  -> FrameFirst
-    Vty.KChar 'k'  -> FrameLast
+    Vty.KChar 'j'  -> FramePrev
+    Vty.KChar 'k'  -> FrameNext
     _              -> NoOp
 evToCmd _ = NoOp
