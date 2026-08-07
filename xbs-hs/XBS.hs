@@ -390,20 +390,23 @@ renderSvg = renderWith staticDisc 1.0
 -- | Live interpreter (xbs-live): each atom is a clickable htmx target
 --   (@GET /focus?atom=i@, shift-click via @hx-vals@), and atoms in the @focus@
 --   stack are highlighted. @zoom@ is the interactive zoom multiplier.
-renderSvgLive :: [Int] -> Double -> Picture -> Html
-renderSvgLive focus = renderWith liveDisc
+renderSvgLive :: [Int] -> Int -> Double -> Picture -> Html
+renderSvgLive focus cursor = renderWith liveDisc
   where
     liveDisc i cx cy r fill =
       let foc    = i `elem` focus
-          stroke = if foc then "#d00000" else "black"     :: Text
-          sw     = if foc then "3"       else "1"         :: Text
+          cur    = i == cursor
+          stroke = if foc then "#d00000" else if cur then "#0070d0" else "black" :: Text
+          sw     = if foc || cur then "3" else "1"                               :: Text
+          dash   = if cur && not foc then "4 2" else ""                           :: Text
       in [hsx|<circle
                 hx-get={"/focus?atom=" <> tshow i}
                 hx-vals="js:{multi: event.shiftKey ? 1 : 0}"
                 hx-target="#data" hx-swap="innerHTML"
                 style="cursor:pointer"
                 cx={tshow cx} cy={tshow cy} r={tshow r}
-                fill={fill} stroke={stroke} stroke-width={sw}/>|]
+                fill={fill} stroke={stroke} stroke-width={sw}
+                stroke-dasharray={dash}/>|]
 
 
 ------------------------------------------------------------------------
@@ -467,11 +470,11 @@ applyCmd home nframes cmd cfg = case cmd of
 -- | Render the scene for the current Config to a standalone SVG document
 --   (one render per interactive frame). @focus@ is the current selection stack
 --   (atoms drawn highlighted + made clickable). Bonds are precomputed and passed in.
-renderConfigSvg :: [Int] -> Config -> V.Vector (Ball, [Stick]) -> Text
-renderConfigSvg focus cfg ballsAndSticks =
+renderConfigSvg :: [Int] -> Int -> Config -> V.Vector (Ball, [Stick]) -> Text
+renderConfigSvg focus cursor cfg ballsAndSticks =
   renderMarkupText
     (svgViewBox (round width) (round height)
-                (renderSvgLive focus cfg.zoom (drawScene cfg cfg.tmat ballsAndSticks)))
+                (renderSvgLive focus cursor cfg.zoom (drawScene cfg cfg.tmat ballsAndSticks)))
 
 -- | The data pane (htmx swap target @#data@): one card per focused atom, newest
 --   first. v1 shows index + species + current-frame coords; LDOS / bonding /

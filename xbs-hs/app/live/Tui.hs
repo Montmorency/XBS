@@ -35,6 +35,8 @@ import qualified Data.Vector                 as V
 import qualified Data.Sequence               as Seq
 import           Data.Sequence               (Seq)
 import           Data.List                   (sortOn)
+import           Data.Char                   (isDigit)
+import           Text.Read                   (readMaybe)
 import           Control.Monad               (void, forM)
 import           Control.Monad.State         (get, put)
 import           Control.Monad.IO.Class      (liftIO)
@@ -64,6 +66,7 @@ data TState = TState
   , tsStatus    :: Status
   , tsPicture   :: Picture
   , tsColorMode :: ColorMode
+  , tsPrompt    :: Maybe String   -- ^ active "goto atom" input buffer (Nothing = normal mode)
   }
 
 -- | Custom brick event: the driver re-rendered (rotation, zoom, frame, load, or a
@@ -80,7 +83,7 @@ run app startPath = do
   pic0     <- readTVarIO app.pictureTV
   let ts0 = TState { tsCwd = startDir, tsList = mkList entries
                    , tsFocus = Explorer, tsStatus = status0, tsPicture = pic0
-                   , tsColorMode = NoColor }
+                   , tsColorMode = NoColor, tsPrompt = Nothing }
   chan <- B.newBChan 16
   _ <- forkIO (watch app chan)
   (_, vty) <- B.customMainWithDefaultVty (Just chan) (theApp app) ts0
@@ -165,30 +168,39 @@ explorerW ts = B.renderList renderEntry (ts.tsFocus == Explorer) ts.tsList
     renderEntry _ e = B.str ((if e.eIsDir then "▸ " else "  ") <> e.eName)
 
 controllerW :: TState -> B.Widget TName
-controllerW ts = B.vBox $ map B.str
-  [ "file:   " <> s.sFile
-  , "atoms:  " <> show s.sNatoms
-  , "frame:  " <> frameLine s
-  , "zoom:   " <> showZoom s.sZoom
-  , "render: persp " <> onoff s.sPersp <> " · line " <> onoff s.sBline
-                     <> " · wire " <> onoff s.sWire <> " · labels " <> showLab s.sLabels
-  , "color:  " <> showCM ts.tsColorMode
-  , "focus:  " <> if null s.sFocus then "-" else show s.sFocus
-  , ""
-  , "── controls (this column) ──"
-  , "  ← → ↑ ↓   rotate"
-  , "  + / -     zoom"
-  , "  p l w n r persp · line · wire · labels · reset"
-  , "  c           braille color (off/gray/color)"
-  , "  f / F     focus next atom / multi-toggle"
-  , "  [ ] / j k  prev/next frame"
-  , ""
-  , "── tui ──"
-  , "  Tab / S-Tab     switch column"
-  , "  M-h / M-l       focus left / right"
-  , "  q / Esc         quit"
-  ]
+controllerW ts = B.vBox $ map B.str $ statusLines ++
+  case ts.tsPrompt of
+    Just buf -> ["", "goto: " <> buf <> "▌"]
+    Nothing  -> legendLines
   where
+    statusLines =
+      [ "file:   " <> s.sFile
+      , "atoms:  " <> show s.sNatoms
+      , "frame:  " <> frameLine s
+      , "zoom:   " <> showZoom s.sZoom
+      , "render: persp " <> onoff s.sPersp <> " · line " <> onoff s.sBline
+                         <> " · wire " <> onoff s.sWire <> " · labels " <> showLab s.sLabels
+      , "color:  " <> showCM ts.tsColorMode
+      , "cursor: " <> show s.sCursor
+      , "focus:  " <> if null s.sFocus then "-" else show s.sFocus
+      ]
+    legendLines =
+      [ ""
+      , "── controls (this column) ──"
+      , "  ← → ↑ ↓   rotate"
+      , "  + / -     zoom"
+      , "  p l w n r persp · line · wire · labels · reset"
+      , "  c           braille color (off/gray/color)"
+      , "  f / F     cursor fwd / back"
+      , "  s / S     push / pop focus stack"
+      , "  ?         goto atom by index"
+      , "  [ ] / j k  prev/next frame"
+      , ""
+      , "── tui ──"
+      , "  Tab / S-Tab     switch column"
+      , "  M-h / M-l       focus left / right"
+      , "  q / Esc         quit"
+      ]
     s = ts.tsStatus
     onoff b = if b then "on" else "off"
     showCM NoColor   = "off"
@@ -213,7 +225,9 @@ handleEvent app ev = do
       s <- liftIO (readTVarIO app.statusTV)
       p <- liftIO (readTVarIO app.pictureTV)
       put ts { tsStatus = s, tsPicture = p }
-    B.VtyEvent (Vty.EvKey k mods) -> handleKey app ts k mods
+    B.VtyEvent (Vty.EvKey k mods)
+      | Just buf <- ts.tsPrompt -> promptKey app ts buf k
+      | otherwise               -> handleKey app ts k mods
     _                           -> pure ()
 
 handleKey :: App -> TState -> Vty.Key -> [Vty.Modifier] -> B.EventM TName TState ()
@@ -238,30 +252,63 @@ handleKey app ts k mods
 --   'evToCmd' for rotation/zoom/frame/toggle commands.
 controllerKey :: App -> TState -> Vty.Key -> [Vty.Modifier] -> B.EventM TName TState ()
 controllerKey app ts k mods = case k of
-    Vty.KChar 'f' | Vty.MShift `notElem` mods -> liftIO (cycleFocus app False)
-    Vty.KChar 'F'                            -> liftIO (cycleFocus app True)
+    Vty.KChar 'f' | Vty.MShift `notElem` mods -> liftIO (moveCursor app 1)
+    Vty.KChar 'F'                            -> liftIO (moveCursor app (-1))
+    Vty.KChar 's' | Vty.MShift `notElem` mods -> liftIO (pushFocus app)
+    Vty.KChar 'S'                            -> liftIO (popFocus app)
+    Vty.KChar '?'                            -> put ts { tsPrompt = Just "" }
     Vty.KChar 'c'                            -> put ts { tsColorMode = nextCM ts.tsColorMode }
     _ -> liftIO (atomically (writeTChan app.cmdQ (Act (evToCmd (Vty.EvKey k mods)))))
   where nextCM FullColor = NoColor
         nextCM m         = succ m
 
--- | Advance the focus cursor to the next atom. Plain = replace (single select);
---   multi = toggle into/out of the stack (shift-click semantics). Wraps around;
---   one past the last atom clears the selection.
-cycleFocus :: App -> Bool -> IO ()
-cycleFocus app multi = atomically $ do
+-- | Handle keystrokes while the "goto atom" prompt is active.
+promptKey :: App -> TState -> String -> Vty.Key -> B.EventM TName TState ()
+promptKey app ts buf = \case
+    Vty.KEsc             -> put ts { tsPrompt = Nothing }
+    Vty.KEnter           -> do
+      case readMaybe buf of
+        Just n -> liftIO $ atomically $ do
+          natoms <- V.length <$> readTVar app.ballsTV
+          if n >= 0 && n < natoms then do
+            writeTVar app.cursorTV n
+            writeTChan app.cmdQ Refocus
+          else pure ()
+        Nothing -> pure ()
+      put ts { tsPrompt = Nothing }
+    Vty.KBS              -> put ts { tsPrompt = Just (safeTail buf) }
+    Vty.KDel             -> put ts { tsPrompt = Just (safeTail buf) }
+    Vty.KChar c | isDigit c -> put ts { tsPrompt = Just (buf ++ [c]) }
+    _                    -> pure ()
+  where safeTail [] = []; safeTail s = init s
+
+-- | Move the browse cursor forward (+1) or backward (−1), wrapping around.
+moveCursor :: App -> Int -> IO ()
+moveCursor app dir = atomically $ do
     natoms <- V.length <$> readTVar app.ballsTV
     if natoms == 0 then pure () else do
-      cur <- readTVar app.focusTV
-      let next = case cur of []    -> 0
-                             (c:_) -> c + 1
-          nf | next >= natoms = if multi then cur else []   -- wrap: clear (single) or stay (multi)
-             | multi          = if next `elem` cur
-                                  then filter (/= next) cur
-                                  else next : cur
-             | otherwise      = [next]
-      writeTVar app.focusTV nf
+      cur <- readTVar app.cursorTV
+      writeTVar app.cursorTV ((cur + dir) `mod` natoms)
       writeTChan app.cmdQ Refocus
+
+-- | Push the current cursor atom onto the focus stack (if not already there).
+pushFocus :: App -> IO ()
+pushFocus app = atomically $ do
+    cur   <- readTVar app.cursorTV
+    focus <- readTVar app.focusTV
+    if cur `elem` focus then pure () else do
+      writeTVar app.focusTV (cur : focus)
+      writeTChan app.cmdQ Refocus
+
+-- | Pop the most recently pushed atom off the focus stack.
+popFocus :: App -> IO ()
+popFocus app = atomically $ do
+    focus <- readTVar app.focusTV
+    case focus of
+      []    -> pure ()
+      (_:rest) -> do
+        writeTVar app.focusTV rest
+        writeTChan app.cmdQ Refocus
 
 explorerKey :: App -> TState -> Vty.Key -> B.EventM TName TState ()
 explorerKey app ts = \case

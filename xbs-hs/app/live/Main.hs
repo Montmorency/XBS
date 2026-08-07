@@ -67,7 +67,7 @@ dumpHtml path = do
   putStrLn "\n=== focusPanel (atoms 0,1) ==="
   TIO.putStrLn (focusPanel (V.fromList balls) focus)
   putStrLn "\n=== renderConfigSvg frame0 (first 1100 chars) ==="
-  TIO.putStrLn (T.take 1100 (renderConfigSvg focus cfg0 bs))
+  TIO.putStrLn (T.take 1100 (renderConfigSvg focus 0 cfg0 bs))
 
 -- | A loaded movie: per frame, the atoms' positions (atom order matches the .bs).
 --   Empty when there's no sibling @.mv@ (static single-frame view).
@@ -96,13 +96,13 @@ buildScene path = do
 
 -- | Project the render loop's 'Config' (+ scene facts) into the TUI controller's
 --   'Status' snapshot.
-statusOf :: Scene -> Config -> Int -> [Int] -> Status
-statusOf scene cfg natoms focus = Status
+statusOf :: Scene -> Config -> Int -> [Int] -> Int -> Status
+statusOf scene cfg natoms focus cursor = Status
   { sFile = takeFileName scene.sceneFile, sNatoms = natoms
   , sFrame = cfg.frame, sNframes = scene.nframes
   , sZoom = cfg.zoom, sPersp = cfg.perspective
   , sBline = cfg.bline, sWire = cfg.wire
-  , sLabels = cfg.labels, sFocus = focus }
+  , sLabels = cfg.labels, sFocus = focus, sCursor = cursor }
 
 -- | Pointer-drag rotation sensitivity (radians per pixel).
 dragSens :: Double
@@ -129,11 +129,13 @@ runLive path = do
   tvar    <- newTVarIO ("" :: Text)
   focusV  <- newTVarIO ([] :: [Int])
   ballsV  <- newTVarIO (V.fromList scene.balls)
-  statusV <- newTVarIO (statusOf scene cfg0 (length scene.balls) [])
+  statusV <- newTVarIO (statusOf scene cfg0 (length scene.balls) [] 0)
   pictV   <- newTVarIO (mempty :: Picture)
   tickV   <- newTVarIO (0 :: Int)
+  fpanelV <- newTVarIO ("" :: Text)
+  cursorV <- newTVarIO (0 :: Int)
   cmdq    <- newTChanIO
-  let app = App tvar focusV ballsV cmdq htmxJs' statusV pictV tickV
+  let app = App tvar focusV ballsV cmdq htmxJs' statusV pictV tickV fpanelV cursorV
 
   -- browser head: SSE + htmx server
   _ <- forkIO (run port (sseApp app))
@@ -191,13 +193,16 @@ driver app scene0 cfg0 = runCC $ do
     let sceneFor scene f = sceneAt scene.bondMap scene.balls scene.movie f
         -- read the focus stack, stash the frame's balls, render SVG + status
         publish scene cfg bs = liftIO $ do
-          focus <- readTVarIO app.focusTV
+          focus  <- readTVarIO app.focusTV
+          cursor <- readTVarIO app.cursorTV
           let pic = drawScene cfg cfg.tmat bs        -- the IR the TUI rasterizes to braille
           atomically $ do
-            writeTVar app.ballsTV (V.map fst bs)
-            writeTVar app.tv (renderConfigSvg focus cfg bs)
-            writeTVar app.statusTV (statusOf scene cfg (V.length bs) focus)
+            let bv = V.map fst bs
+            writeTVar app.ballsTV bv
+            writeTVar app.tv (renderConfigSvg focus cursor cfg bs)
+            writeTVar app.statusTV (statusOf scene cfg (V.length bs) focus cursor)
             writeTVar app.pictureTV pic
+            writeTVar app.focusPanelTV (focusPanel bv focus)
             modifyTVar' app.tickTV (+1)              -- wake the TUI on every visual change
         -- apply a discrete Cmd; rebuild the scene only on frame change
         runCmd scene cmd cfg bs = case cmd of
@@ -214,7 +219,7 @@ driver app scene0 cfg0 = runCC $ do
           case (r :: Either SomeException (Scene, Config)) of
             Left _                -> go scene cfg bs
             Right (scene', cfg0') -> do
-              liftIO (atomically (writeTVar app.focusTV []))   -- selection is per-structure
+              liftIO (atomically (writeTVar app.focusTV [] >> writeTVar app.cursorTV 0))
               go scene' cfg0' (sceneFor scene' cfg0'.frame)
         go scene cfg bs = do
           publish scene cfg bs
@@ -247,7 +252,7 @@ sseApp app req respond = case pathInfo req of
                          [(hContentType, "text/html; charset=utf-8")] pageHtml
     ["events"]      -> respond $ responseStream status200
                          [(hContentType, "text/event-stream"), (hCacheControl, "no-cache")]
-                         (sseStream app.tv)
+                         (sseStream app)
     ["focus"]       -> focusHandler app req respond
     ["cmd"]         -> cmdHandler app req respond
     ["htmx.min.js"] -> respond $ responseLBS status200 [(hContentType, "text/javascript")] app.htmxJs
@@ -260,7 +265,15 @@ sseApp app req respond = case pathInfo req of
 cmdHandler :: App -> Application
 cmdHandler app req respond = do
   case TE.decodeUtf8 <$> join (lookup "c" q) of
-    Just "rot" -> enqueue (RotDelta (num "dx") (num "dy"))
+    Just "rot"  -> enqueue (RotDelta (num "dx") (num "dy"))
+    Just "goto" -> do
+      let atom = round (num "atom") :: Int
+      atomically $ do
+        natoms <- V.length <$> readTVar app.ballsTV
+        if atom >= 0 && atom < natoms then do
+          writeTVar app.cursorTV atom
+          writeTChan app.cmdQ Refocus
+        else pure ()
     Just t     -> maybe (pure ()) (enqueue . Act) (tokenToCmd t)
     Nothing    -> pure ()
   respond (responseLBS status200 [] "")
@@ -318,18 +331,22 @@ updateFocus multi atom cur
 -- | Stream the latest SVG whenever it changes. STM @retry@ on the shared TVar is
 --   the broadcast: every connected client wakes and emits the new frame. The
 --   initial read (old = "") sends the current frame to late-joining browsers.
-sseStream :: TVar Text -> StreamingBody
-sseStream tv write flush = go ""
+sseStream :: App -> StreamingBody
+sseStream app write flush = go "" ""
   where
-    go old = do
-      new <- atomically $ do
-               v <- readTVar tv
-               if v == old then retry else return v
+    go oldSvg oldFp = do
+      (newSvg, newFp) <- atomically $ do
+               sv <- readTVar app.tv
+               fp <- readTVar app.focusPanelTV
+               if sv == oldSvg && fp == oldFp then retry else pure (sv, fp)
       write $ BB.byteString "data: "
-           <> BB.byteString (TE.encodeUtf8 (oneLine new))
+           <> BB.byteString (TE.encodeUtf8 (oneLine newSvg))
+           <> BB.byteString "\n\n"
+           <> BB.byteString "event: focus\ndata: "
+           <> BB.byteString (TE.encodeUtf8 (oneLine newFp))
            <> BB.byteString "\n\n"
       flush
-      go new
+      go newSvg newFp
     oneLine = T.map (\c -> if c == '\n' then ' ' else c)   -- SSE data is single-line
 
 -- | Two-pane shell: | #data (focus/inspection) | #view (SVG) |. The SVG streams
@@ -357,14 +374,18 @@ pageHtml = LBS.fromStrict $ TE.encodeUtf8 $ T.concat
     , "<script>"
     , "var view=document.getElementById('view');"
     -- stream the SVG; htmx.process wires the new circles' hx-get bindings
-    , "new EventSource('/events').onmessage=function(e){view.innerHTML=e.data;htmx.process(view);};"
+    , "var es=new EventSource('/events');"
+    , "es.onmessage=function(e){view.innerHTML=e.data;htmx.process(view);};"
+    , "es.addEventListener('focus',function(e){document.getElementById('data').innerHTML=e.data;});"
     , "function send(q){fetch('/cmd?'+q);}"
     -- keystroke parity with the terminal (same keys drive the shared Config)
     , "var km={ArrowLeft:'rotl',ArrowRight:'rotr',ArrowUp:'rotu',ArrowDown:'rotd',"
     ,   "'<':'rotccw','>':'rotcw',p:'persp',l:'line',w:'wire',n:'labels',r:'reset',"
     ,   "'[':'frameprev',']':'framenext',j:'frameprev',k:'framenext',"
     ,   "'+':'zoomin','=':'zoomin','-':'zoomout'};"
-    , "addEventListener('keydown',function(e){var c=km[e.key];if(c){send('c='+c);e.preventDefault();}});"
+    , "addEventListener('keydown',function(e){"
+    , "if(e.key==='?'){var n=prompt('goto atom:');if(n!=null&&n.match(/^\\d+$/))send('c=goto&atom='+n);e.preventDefault();return;}"
+    , "var c=km[e.key];if(c){send('c='+c);e.preventDefault();}});"
     -- trackpad / wheel → zoom
     , "view.addEventListener('wheel',function(e){send('c='+(e.deltaY<0?'zoomin':'zoomout'));e.preventDefault();},{passive:false});"
     -- pointer-drag → rotate (deltas accumulated, flushed once per animation frame)
