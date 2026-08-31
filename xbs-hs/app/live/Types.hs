@@ -41,6 +41,8 @@ data App = App
   , statusTV :: TVar Status           -- ^ live view state, mirrored into the TUI controller pane
   , pictureTV:: TVar Picture          -- ^ current scene as the backend-neutral IR (TUI rasterizes it)
   , tickTV   :: TVar Int              -- ^ render counter, bumped every publish; wakes the TUI watcher
+  , focusPanelTV :: TVar Text        -- ^ latest focus-panel HTML (SSE-streamed to the browser)
+  , cursorTV :: TVar Int             -- ^ cursor: which atom f/F is browsing (not yet selected)
   }
 
 -- | A snapshot of the render loop's 'Config' (+ scene facts) for the TUI
@@ -57,6 +59,7 @@ data Status = Status
   , sWire    :: Bool
   , sLabels  :: Labels
   , sFocus   :: [Int]
+  , sCursor  :: Int
   }
   deriving (Eq)
 
