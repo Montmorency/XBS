@@ -13,5 +13,5 @@ xbs-hs flow:
 Starts a terminal ui and an interactive viewer at localhost:9090 in your browser:
 
 ```bash
-    cabal run xbs-live -- ../examples/rings.bs
+    cabal run xbs-live -- ../examples/ring.bs
 ```
