@@ -139,6 +139,9 @@
             nativeBuildInputs = with pkgs.haskellPackages; [
               cabal-install
               haskell-language-server
+              # duckdb: the structure store beside xbs-live (compose.scm —
+              # eddy's *Processes* pane brings both up)
+              pkgs.duckdb
             ];
           };
 

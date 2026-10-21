@@ -25,3 +25,6 @@ result*
 
 # Test folders
 static/Test.FileStorage.ControllerFunctionsSpec.claude/
+
+# duckdb store made by compose.scm
+*.duckdb
